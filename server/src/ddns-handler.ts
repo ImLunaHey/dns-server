@@ -1,0 +1,417 @@
+import * as crypto from 'crypto';
+import { logger } from './logger.js';
+import { dbZones, dbZoneRecords, dbTSIGKeys } from './db.js';
+
+// DNS UPDATE OPCODE is 5
+const UPDATE_OPCODE = 5;
+const TSIG_TYPE = 250;
+
+interface TSIGRecord {
+  name: string;
+  algorithm: string;
+  timeSigned: number;
+  fudge: number;
+  macSize: number;
+  mac: Buffer;
+  originalID: number;
+  error: number;
+  otherLen: number;
+  otherData: Buffer;
+}
+
+/**
+ * Parse TSIG record from DNS message
+ */
+function parseTSIG(message: Buffer, offset: number): TSIGRecord | null {
+  try {
+    // TSIG name (should be the key name)
+    let nameOffset = offset;
+    const nameParts: string[] = [];
+    while (nameOffset < message.length && message[nameOffset] !== 0) {
+      const length = message[nameOffset];
+      if ((length & 0xc0) === 0xc0) {
+        // Compression pointer - not supported in TSIG
+        return null;
+      }
+      nameOffset++;
+      if (nameOffset + length > message.length) return null;
+      nameParts.push(message.toString('utf8', nameOffset, nameOffset + length));
+      nameOffset += length;
+    }
+    nameOffset++; // Skip null terminator
+    const name = nameParts.join('.');
+
+    if (nameOffset + 10 > message.length) return null;
+
+    const type = message.readUInt16BE(nameOffset);
+    if (type !== TSIG_TYPE) return null;
+    nameOffset += 8; // Skip TYPE, CLASS, TTL
+
+    const dataLength = message.readUInt16BE(nameOffset);
+    nameOffset += 2;
+
+    if (nameOffset + dataLength > message.length) return null;
+
+    // Parse TSIG data
+    const algorithmOffset = nameOffset;
+    const algorithmParts: string[] = [];
+    let algOffset = algorithmOffset;
+    while (algOffset < message.length && message[algOffset] !== 0) {
+      const length = message[algOffset];
+      algOffset++;
+      if (algOffset + length > message.length) return null;
+      algorithmParts.push(message.toString('utf8', algOffset, algOffset + length));
+      algOffset += length;
+    }
+    algOffset++; // Skip null terminator
+    const algorithm = algorithmParts.join('.');
+
+    if (algOffset + 20 > message.length) return null;
+
+    const timeSigned = (message.readUInt32BE(algOffset) << 16) | message.readUInt16BE(algOffset + 4);
+    const fudge = message.readUInt16BE(algOffset + 6);
+    const macSize = message.readUInt16BE(algOffset + 8);
+    algOffset += 10;
+
+    if (algOffset + macSize > message.length) return null;
+    const mac = message.slice(algOffset, algOffset + macSize);
+    algOffset += macSize;
+
+    if (algOffset + 6 > message.length) return null;
+    const originalID = message.readUInt16BE(algOffset);
+    const error = message.readUInt16BE(algOffset + 2);
+    const otherLen = message.readUInt16BE(algOffset + 4);
+    algOffset += 6;
+
+    const otherData =
+      otherLen > 0 && algOffset + otherLen <= message.length
+        ? message.slice(algOffset, algOffset + otherLen)
+        : Buffer.alloc(0);
+
+    return {
+      name,
+      algorithm,
+      timeSigned,
+      fudge,
+      macSize,
+      mac,
+      originalID,
+      error,
+      otherLen,
+      otherData,
+    };
+  } catch (error) {
+    logger.error('Error parsing TSIG', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return null;
+  }
+}
+
+/**
+ * Verify TSIG signature
+ */
+function verifyTSIG(message: Buffer, tsig: TSIGRecord, secret: string): boolean {
+  try {
+    // Build message for verification (original message without TSIG)
+    const tsigStart = message.indexOf(
+      Buffer.from(
+        tsig.name
+          .split('.')
+          .map((p) => p.length)
+          .concat([0]),
+      ),
+    );
+    if (tsigStart === -1) return false;
+
+    // Find TSIG record in message
+    let tsigOffset = tsigStart;
+    while (tsigOffset < message.length && message[tsigOffset] !== 0) {
+      const length = message[tsigOffset];
+      if ((length & 0xc0) === 0xc0) break;
+      tsigOffset += length + 1;
+    }
+    tsigOffset++; // Skip null terminator
+
+    // Message to verify is everything before TSIG, plus TSIG data (without MAC)
+    const messageBeforeTSIG = message.slice(0, tsigOffset);
+
+    // Build TSIG data for signing (without MAC)
+    const tsigData = Buffer.alloc(tsig.name.length + 2 + tsig.algorithm.length + 2 + 18);
+    let pos = 0;
+    for (const part of tsig.name.split('.')) {
+      tsigData[pos++] = part.length;
+      Buffer.from(part).copy(tsigData, pos);
+      pos += part.length;
+    }
+    tsigData[pos++] = 0;
+    tsigData.writeUInt16BE(TSIG_TYPE, pos);
+    pos += 2;
+    tsigData.writeUInt16BE(1, pos); // Class
+    pos += 2;
+    tsigData.writeUInt32BE(0, pos); // TTL
+    pos += 4;
+    // Data length will be set after building data
+    const dataStart = pos + 2;
+    pos += 2;
+
+    // Algorithm name
+    for (const part of tsig.algorithm.split('.')) {
+      tsigData[pos++] = part.length;
+      Buffer.from(part).copy(tsigData, pos);
+      pos += part.length;
+    }
+    tsigData[pos++] = 0;
+
+    // Time signed (48-bit)
+    const timeHigh = (tsig.timeSigned >> 16) & 0xffff;
+    const timeLow = tsig.timeSigned & 0xffff;
+    tsigData.writeUInt16BE(timeHigh, pos);
+    pos += 2;
+    tsigData.writeUInt16BE(timeLow, pos);
+    pos += 2;
+    tsigData.writeUInt16BE(tsig.fudge, pos);
+    pos += 2;
+    tsigData.writeUInt16BE(tsig.macSize, pos);
+    pos += 2;
+    // MAC will be zero-filled for verification
+    pos += tsig.macSize;
+    tsigData.writeUInt16BE(tsig.originalID, pos);
+    pos += 2;
+    tsigData.writeUInt16BE(tsig.error, pos);
+    pos += 2;
+    tsigData.writeUInt16BE(tsig.otherLen, pos);
+    pos += 2;
+    if (tsig.otherLen > 0) {
+      tsig.otherData.copy(tsigData, pos);
+      pos += tsig.otherLen;
+    }
+
+    // Set data length
+    const dataLength = pos - dataStart;
+    tsigData.writeUInt16BE(dataLength, dataStart - 2);
+
+    // Build message for HMAC
+    const messageToSign = Buffer.concat([messageBeforeTSIG, tsigData.slice(0, pos)]);
+
+    // Verify HMAC based on algorithm
+    let expectedMAC: Buffer;
+    if (tsig.algorithm === 'hmac-sha256' || tsig.algorithm === 'hmac-sha256.') {
+      const hmac = crypto.createHmac('sha256', secret);
+      hmac.update(messageToSign);
+      expectedMAC = hmac.digest();
+    } else if (tsig.algorithm === 'hmac-sha1' || tsig.algorithm === 'hmac-sha1.') {
+      const hmac = crypto.createHmac('sha1', secret);
+      hmac.update(messageToSign);
+      expectedMAC = hmac.digest();
+    } else if (tsig.algorithm === 'hmac-md5' || tsig.algorithm === 'hmac-md5.') {
+      const hmac = crypto.createHmac('md5', secret);
+      hmac.update(messageToSign);
+      expectedMAC = hmac.digest();
+    } else {
+      logger.warn('Unsupported TSIG algorithm', { algorithm: tsig.algorithm });
+      return false;
+    }
+
+    // Compare MACs (constant-time comparison)
+    if (expectedMAC.length !== tsig.mac.length) return false;
+    return crypto.timingSafeEqual(expectedMAC, tsig.mac);
+  } catch (error) {
+    logger.error('Error verifying TSIG', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return false;
+  }
+}
+
+/**
+ * Handle DNS UPDATE request (RFC 2136)
+ */
+export function handleDNSUpdate(message: Buffer, clientIp: string): Buffer | null {
+  try {
+    if (message.length < 12) return null;
+
+    const id = message.readUInt16BE(0);
+    const flags = message.readUInt16BE(2);
+    const opcode = (flags >> 11) & 0xf;
+
+    // Check if it's an UPDATE request
+    if (opcode !== UPDATE_OPCODE) return null;
+
+    // Parse zones (prerequisite section)
+    let offset = 12;
+    const zoneCount = message.readUInt16BE(4);
+    const zones: Array<{ name: string; type: number; class: number }> = [];
+
+    for (let i = 0; i < zoneCount && offset < message.length; i++) {
+      const nameResult = parseDomainName(message, offset);
+      if (!nameResult) break;
+      offset = nameResult.newOffset;
+      if (offset + 4 > message.length) break;
+      const type = message.readUInt16BE(offset);
+      const class_ = message.readUInt16BE(offset + 2);
+      offset += 4;
+      zones.push({ name: nameResult.name, type, class: class_ });
+    }
+
+    if (zones.length === 0) {
+      return createUpdateResponse(id, 1); // FORMERR
+    }
+
+    const zone = zones[0];
+    const zoneRecord = dbZones.findZoneForDomain(zone.name);
+    if (!zoneRecord) {
+      return createUpdateResponse(id, 3); // NXDOMAIN
+    }
+
+    // Parse TSIG from additional section
+    const arCount = message.readUInt16BE(10);
+    let tsig: TSIGRecord | null = null;
+    let tsigOffset = offset;
+
+    // Skip prerequisite, update, and additional sections to find TSIG
+    // For simplicity, we'll search from the end
+    for (let i = message.length - 50; i >= 0 && i < message.length; i--) {
+      if (message[i] === 0) {
+        const potentialTSIG = parseTSIG(message, i - 1);
+        if (potentialTSIG) {
+          tsig = potentialTSIG;
+          break;
+        }
+      }
+    }
+
+    if (!tsig) {
+      return createUpdateResponse(id, 9); // NOTAUTH - TSIG required
+    }
+
+    // Verify TSIG
+    const tsigKey = dbTSIGKeys.getByName(tsig.name);
+    if (!tsigKey) {
+      return createUpdateResponse(id, 9); // NOTAUTH - Unknown key
+    }
+
+    if (!verifyTSIG(message, tsig, tsigKey.secret)) {
+      return createUpdateResponse(id, 9); // NOTAUTH - Invalid signature
+    }
+
+    // Parse update section
+    const updateCount = message.readUInt16BE(6);
+    const updates: Array<{ name: string; type: number; ttl: number; data: string }> = [];
+
+    // Skip prerequisite section (already parsed)
+    for (let i = 0; i < updateCount && offset < message.length; i++) {
+      const nameResult = parseDomainName(message, offset);
+      if (!nameResult) break;
+      offset = nameResult.newOffset;
+      if (offset + 10 > message.length) break;
+      const type = message.readUInt16BE(offset);
+      offset += 2;
+      const class_ = message.readUInt16BE(offset);
+      offset += 2;
+      const ttl = message.readUInt32BE(offset);
+      offset += 4;
+      const dataLength = message.readUInt16BE(offset);
+      offset += 2;
+      if (offset + dataLength > message.length) break;
+
+      // Parse data based on type
+      let data = '';
+      if (type === 1) {
+        // A record
+        data = `${message[offset]}.${message[offset + 1]}.${message[offset + 2]}.${message[offset + 3]}`;
+      } else if (type === 28) {
+        // AAAA record
+        const parts: string[] = [];
+        for (let j = 0; j < 16; j += 2) {
+          parts.push(
+            message
+              .readUInt16BE(offset + j)
+              .toString(16)
+              .padStart(4, '0'),
+          );
+        }
+        data = parts.join(':');
+      } else {
+        data = message.slice(offset, offset + dataLength).toString('utf8');
+      }
+      offset += dataLength;
+      updates.push({ name: nameResult.name, type, ttl, data });
+    }
+
+    // Apply updates
+    for (const update of updates) {
+      const recordName = update.name.replace(`.${zone.name}`, '').replace(zone.name, '') || '@';
+      const typeMap: Record<number, string> = {
+        1: 'A',
+        28: 'AAAA',
+        15: 'MX',
+        16: 'TXT',
+        2: 'NS',
+        5: 'CNAME',
+      };
+      const typeName = typeMap[update.type] || 'A';
+
+      // Check if record exists
+      const existing = dbZoneRecords.getByZone(zoneRecord.id).find((r) => r.name === recordName && r.type === typeName);
+
+      if (existing) {
+        dbZoneRecords.update(existing.id, { data: update.data, ttl: update.ttl });
+      } else {
+        dbZoneRecords.create(zoneRecord.id, recordName, typeName, update.ttl, update.data);
+      }
+    }
+
+    // Update SOA serial
+    dbZones.update(zoneRecord.id, { soa_serial: zoneRecord.soa_serial + 1 });
+
+    return createUpdateResponse(id, 0); // NOERROR
+  } catch (error) {
+    logger.error('Error handling DNS UPDATE', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return null;
+  }
+}
+
+function parseDomainName(message: Buffer, offset: number): { name: string; newOffset: number } | null {
+  const parts: string[] = [];
+  let currentOffset = offset;
+  const visited = new Set<number>();
+
+  while (currentOffset < message.length) {
+    if (visited.has(currentOffset)) break;
+    visited.add(currentOffset);
+
+    const length = message[currentOffset];
+    if (length === 0) {
+      currentOffset++;
+      break;
+    }
+    if ((length & 0xc0) === 0xc0) {
+      const pointer = ((length & 0x3f) << 8) | message[currentOffset + 1];
+      if (pointer >= message.length) break;
+      const decompressed = parseDomainName(message, pointer);
+      if (decompressed) parts.push(...decompressed.name.split('.'));
+      currentOffset += 2;
+      break;
+    }
+    currentOffset++;
+    if (currentOffset + length > message.length) return null;
+    parts.push(message.toString('utf8', currentOffset, currentOffset + length));
+    currentOffset += length;
+  }
+
+  return { name: parts.join('.'), newOffset: currentOffset };
+}
+
+function createUpdateResponse(id: number, rcode: number): Buffer {
+  const response = Buffer.alloc(12);
+  response.writeUInt16BE(id, 0);
+  response.writeUInt16BE(0x8400 | (rcode & 0xf), 2); // QR=1, AA=1, RCODE
+  response.writeUInt16BE(0, 4); // ZOCOUNT
+  response.writeUInt16BE(0, 6); // PRCOUNT
+  response.writeUInt16BE(0, 8); // UPCOUNT
+  response.writeUInt16BE(0, 10); // ADCOUNT
+  return response;
+}

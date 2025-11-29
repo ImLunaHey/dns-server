@@ -27,6 +27,7 @@ import {
   dbBlockPageSettings,
   dbZones,
   dbZoneRecords,
+  dbTSIGKeys,
 } from './db.js';
 import db from './db.js';
 import { auth } from './auth.js';
@@ -1230,6 +1231,46 @@ app.put('/api/conditional-forwarding/:id/enable', requireAuth, async (c) => {
   const id = parseInt(c.req.param('id'), 10);
   const { enabled } = await c.req.json();
   dbConditionalForwarding.setEnabled(id, enabled);
+  return c.json({ success: true });
+});
+
+// TSIG Keys for Dynamic DNS
+app.get('/api/tsig-keys', requireAuth, (c) => {
+  const keys = dbTSIGKeys.getAll();
+  return c.json(
+    keys.map((key) => ({
+      id: key.id,
+      name: key.name,
+      algorithm: key.algorithm,
+      enabled: key.enabled === 1,
+      createdAt: key.createdAt,
+      updatedAt: key.updatedAt,
+    })),
+  );
+});
+
+app.post('/api/tsig-keys', requireAuth, async (c) => {
+  const { name, algorithm, secret } = await c.req.json();
+  if (!name || !algorithm || !secret) {
+    return c.json({ error: 'name, algorithm, and secret are required' }, 400);
+  }
+  dbTSIGKeys.create(name, algorithm, secret);
+  return c.json({ success: true });
+});
+
+app.put('/api/tsig-keys/:id/enable', requireAuth, async (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  const { enabled } = await c.req.json();
+  if (typeof enabled !== 'boolean') {
+    return c.json({ error: 'enabled must be a boolean' }, 400);
+  }
+  dbTSIGKeys.setEnabled(id, enabled);
+  return c.json({ success: true });
+});
+
+app.delete('/api/tsig-keys/:id', requireAuth, (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  dbTSIGKeys.delete(id);
   return c.json({ success: true });
 });
 

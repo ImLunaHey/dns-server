@@ -265,6 +265,20 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_zone_keys_zone_id ON zone_keys(zone_id);
   CREATE INDEX IF NOT EXISTS idx_zone_keys_active ON zone_keys(active);
 
+  -- TSIG keys for Dynamic DNS (RFC 2136/2845)
+  CREATE TABLE IF NOT EXISTS tsig_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    algorithm TEXT NOT NULL DEFAULT 'hmac-sha256',
+    secret TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_tsig_keys_name ON tsig_keys(name);
+  CREATE INDEX IF NOT EXISTS idx_tsig_keys_enabled ON tsig_keys(enabled);
+
   -- Better-auth tables
   CREATE TABLE IF NOT EXISTS "user" (
     "id" text not null primary key,
@@ -1972,8 +1986,11 @@ export const dbConditionalForwarding = {
 
       if (isMatch) {
         // Prefer longer domain matches, then higher priority
-        if (!bestMatch || matchLength > bestMatch.matchLength || 
-            (matchLength === bestMatch.matchLength && rule.priority > bestMatch.priority)) {
+        if (
+          !bestMatch ||
+          matchLength > bestMatch.matchLength ||
+          (matchLength === bestMatch.matchLength && rule.priority > bestMatch.priority)
+        ) {
           bestMatch = {
             domain: ruleDomain,
             upstreamDNS: rule.upstreamDNS,
@@ -2608,7 +2625,10 @@ export const dbZoneKeys = {
     return result.lastInsertRowid as number;
   },
 
-  getByZone(zoneId: number, activeOnly: boolean = true): Array<{
+  getByZone(
+    zoneId: number,
+    activeOnly: boolean = true,
+  ): Array<{
     id: number;
     zoneId: number;
     flags: number;
@@ -2654,16 +2674,18 @@ export const dbZoneKeys = {
     active: number;
   } | null {
     const stmt = db.prepare('SELECT * FROM zone_keys WHERE zone_id = ? AND flags = 256 AND active = 1 LIMIT 1');
-    const row = stmt.get(zoneId) as {
-      id: number;
-      zone_id: number;
-      flags: number;
-      algorithm: number;
-      private_key: string;
-      public_key: Buffer;
-      key_tag: number;
-      active: number;
-    } | undefined;
+    const row = stmt.get(zoneId) as
+      | {
+          id: number;
+          zone_id: number;
+          flags: number;
+          algorithm: number;
+          private_key: string;
+          public_key: Buffer;
+          key_tag: number;
+          active: number;
+        }
+      | undefined;
     if (!row) return null;
     return {
       id: row.id,
@@ -2684,6 +2706,61 @@ export const dbZoneKeys = {
 
   delete(id: number) {
     const stmt = db.prepare('DELETE FROM zone_keys WHERE id = ?');
+    stmt.run(id);
+  },
+};
+
+export const dbTSIGKeys = {
+  create(name: string, algorithm: string, secret: string) {
+    const now = Date.now();
+    const stmt = db.prepare(`
+      INSERT INTO tsig_keys (name, algorithm, secret, enabled, createdAt, updatedAt)
+      VALUES (?, ?, ?, 1, ?, ?)
+    `);
+    const result = stmt.run(name.toLowerCase(), algorithm, secret, now, now);
+    return result.lastInsertRowid as number;
+  },
+
+  getByName(name: string): {
+    id: number;
+    name: string;
+    algorithm: string;
+    secret: string;
+    enabled: number;
+  } | null {
+    const stmt = db.prepare('SELECT * FROM tsig_keys WHERE name = ? AND enabled = 1');
+    const row = stmt.get(name.toLowerCase()) as
+      | {
+          id: number;
+          name: string;
+          algorithm: string;
+          secret: string;
+          enabled: number;
+        }
+      | undefined;
+    return row || null;
+  },
+
+  getAll() {
+    const stmt = db.prepare('SELECT * FROM tsig_keys ORDER BY name ASC');
+    return stmt.all() as Array<{
+      id: number;
+      name: string;
+      algorithm: string;
+      secret: string;
+      enabled: number;
+      createdAt: number;
+      updatedAt: number;
+    }>;
+  },
+
+  setEnabled(id: number, enabled: boolean) {
+    const stmt = db.prepare('UPDATE tsig_keys SET enabled = ?, updatedAt = ? WHERE id = ?');
+    stmt.run(enabled ? 1 : 0, Date.now(), id);
+  },
+
+  delete(id: number) {
+    const stmt = db.prepare('DELETE FROM tsig_keys WHERE id = ?');
     stmt.run(id);
   },
 };

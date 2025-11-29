@@ -28,6 +28,7 @@ import {
 import { logger } from './logger.js';
 import { validateDNSSEC, validateChainOfTrust } from './dnssec-validator.js';
 import { signRRset, generateDNSKEYRecord } from './dnssec-signer.js';
+import { handleDNSUpdate } from './ddns-handler.js';
 
 export interface DNSQuery {
   id: string;
@@ -1624,6 +1625,19 @@ export class DNSServer {
     const now = Date.now();
     this.queryRateHistory = this.queryRateHistory.filter((time) => now - time < 60000);
     this.queryRateHistory.push(now);
+
+    // Check if it's a DNS UPDATE request (OPCODE 5)
+    if (msg.length >= 12) {
+      const flags = msg.readUInt16BE(2);
+      const opcode = (flags >> 11) & 0xf;
+      if (opcode === 5) {
+        // DNS UPDATE request
+        const updateResponse = handleDNSUpdate(msg, clientIp);
+        if (updateResponse) {
+          return updateResponse;
+        }
+      }
+    }
 
     const parsed = this.parseDNSQuery(msg);
 
