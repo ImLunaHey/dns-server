@@ -23,9 +23,11 @@ import {
   dbCache,
   dbZones,
   dbZoneRecords,
+  dbZoneKeys,
 } from './db.js';
 import { logger } from './logger.js';
 import { validateDNSSEC, validateChainOfTrust } from './dnssec-validator.js';
+import { signRRset, generateDNSKEYRecord } from './dnssec-signer.js';
 
 export interface DNSQuery {
   id: string;
@@ -1009,10 +1011,98 @@ export class DNSServer {
       authorityCount = 1;
     }
 
+    // Add DNSSEC signatures if enabled for zone
+    let additionalCount = 0;
+    const zoneKeys = dbZoneKeys.getByZone(zone.id, true);
+    if (zoneKeys.length > 0 && answers.length > 0) {
+      // Get ZSK (Zone Signing Key) for signing
+      const zsk = zoneKeys.find((k) => k.flags === 256) || zoneKeys[0];
+      
+      // Build resource records for signing
+      const recordsToSign: Array<{ name: string; type: number; ttl: number; data: Buffer }> = [];
+      for (const record of answers) {
+        const typeMap: Record<string, number> = {
+          A: 1,
+          AAAA: 28,
+          MX: 15,
+          TXT: 16,
+          NS: 2,
+          CNAME: 5,
+          SOA: 6,
+          PTR: 12,
+          SRV: 33,
+        };
+        const recordType = typeMap[record.type] || 1;
+        
+        // Convert record data to Buffer
+        let recordData: Buffer;
+        if (record.type === 'A') {
+          recordData = this.ipv4ToBytes(record.data);
+        } else if (record.type === 'AAAA') {
+          recordData = this.ipv6ToBytes(record.data);
+        } else if (record.type === 'TXT') {
+          const txtData = Buffer.from(record.data, 'utf8');
+          recordData = Buffer.concat([Buffer.from([txtData.length]), txtData]);
+        } else {
+          recordData = this.domainToBytes(record.data);
+        }
+        
+        recordsToSign.push({
+          name: domain,
+          type: recordType,
+          ttl: record.ttl,
+          data: recordData,
+        });
+      }
+      
+      // Sign the RRset
+      if (recordsToSign.length > 0) {
+        const rrsig = signRRset(recordsToSign, zone.domain, zsk, answers[0].ttl);
+        if (rrsig) {
+          // Add RRSIG record to additional section
+          const rrsigPointer = 0xc000 | questionNameStart;
+          response.writeUInt16BE(rrsigPointer, offset);
+          offset += 2;
+          response.writeUInt16BE(46, offset); // RRSIG type
+          offset += 2;
+          response.writeUInt16BE(1, offset); // Class IN
+          offset += 2;
+          response.writeUInt32BE(answers[0].ttl, offset); // TTL
+          offset += 4;
+          response.writeUInt16BE(rrsig.length, offset); // RDLENGTH
+          offset += 2;
+          rrsig.copy(response, offset);
+          offset += rrsig.length;
+          additionalCount++;
+        }
+      }
+      
+      // Add DNSKEY records if requested (type 48)
+      if (queryType === 48) {
+        for (const key of zoneKeys) {
+          const dnskeyRecord = generateDNSKEYRecord(key);
+          const dnskeyPointer = 0xc000 | questionNameStart;
+          response.writeUInt16BE(dnskeyPointer, offset);
+          offset += 2;
+          response.writeUInt16BE(48, offset); // DNSKEY type
+          offset += 2;
+          response.writeUInt16BE(1, offset); // Class IN
+          offset += 2;
+          response.writeUInt32BE(3600, offset); // TTL
+          offset += 4;
+          response.writeUInt16BE(dnskeyRecord.length, offset); // RDLENGTH
+          offset += 2;
+          dnskeyRecord.copy(response, offset);
+          offset += dnskeyRecord.length;
+          answerCount++;
+        }
+      }
+    }
+
     // Update counts
     response.writeUInt16BE(answerCount, 6);
     response.writeUInt16BE(authorityCount, 8);
-    response.writeUInt16BE(0, 10); // Additional count
+    response.writeUInt16BE(additionalCount, 10); // Additional count
 
     return response.slice(0, offset);
   }

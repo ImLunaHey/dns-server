@@ -246,6 +246,24 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_zone_records_name ON zone_records(name);
   CREATE INDEX IF NOT EXISTS idx_zone_records_type ON zone_records(type);
 
+  -- DNSSEC zone keys
+  CREATE TABLE IF NOT EXISTS zone_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    zone_id INTEGER NOT NULL,
+    flags INTEGER NOT NULL DEFAULT 257, -- ZSK (256) or KSK (257)
+    algorithm INTEGER NOT NULL DEFAULT 13, -- Ed25519
+    private_key TEXT NOT NULL,
+    public_key BLOB NOT NULL,
+    key_tag INTEGER,
+    active INTEGER NOT NULL DEFAULT 1,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    FOREIGN KEY (zone_id) REFERENCES zones(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_zone_keys_zone_id ON zone_keys(zone_id);
+  CREATE INDEX IF NOT EXISTS idx_zone_keys_active ON zone_keys(active);
+
   -- Better-auth tables
   CREATE TABLE IF NOT EXISTS "user" (
     "id" text not null primary key,
@@ -2535,6 +2553,97 @@ export const dbZoneRecords = {
   deleteByZone(zoneId: number) {
     const stmt = db.prepare('DELETE FROM zone_records WHERE zone_id = ?');
     stmt.run(zoneId);
+  },
+};
+
+export const dbZoneKeys = {
+  create(zoneId: number, flags: number, algorithm: number, privateKey: string, publicKey: Buffer, keyTag: number) {
+    const now = Date.now();
+    const stmt = db.prepare(`
+      INSERT INTO zone_keys (zone_id, flags, algorithm, private_key, public_key, key_tag, active, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+    `);
+    const result = stmt.run(zoneId, flags, algorithm, privateKey, publicKey, keyTag, now, now);
+    return result.lastInsertRowid as number;
+  },
+
+  getByZone(zoneId: number, activeOnly: boolean = true): Array<{
+    id: number;
+    zoneId: number;
+    flags: number;
+    algorithm: number;
+    privateKey: string;
+    publicKey: Buffer;
+    keyTag: number;
+    active: number;
+  }> {
+    const stmt = activeOnly
+      ? db.prepare('SELECT * FROM zone_keys WHERE zone_id = ? AND active = 1')
+      : db.prepare('SELECT * FROM zone_keys WHERE zone_id = ?');
+    const rows = stmt.all(zoneId) as Array<{
+      id: number;
+      zone_id: number;
+      flags: number;
+      algorithm: number;
+      private_key: string;
+      public_key: Buffer;
+      key_tag: number;
+      active: number;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      zoneId: row.zone_id,
+      flags: row.flags,
+      algorithm: row.algorithm,
+      privateKey: row.private_key,
+      publicKey: row.public_key,
+      keyTag: row.key_tag,
+      active: row.active,
+    }));
+  },
+
+  getZSK(zoneId: number): {
+    id: number;
+    zoneId: number;
+    flags: number;
+    algorithm: number;
+    privateKey: string;
+    publicKey: Buffer;
+    keyTag: number;
+    active: number;
+  } | null {
+    const stmt = db.prepare('SELECT * FROM zone_keys WHERE zone_id = ? AND flags = 256 AND active = 1 LIMIT 1');
+    const row = stmt.get(zoneId) as {
+      id: number;
+      zone_id: number;
+      flags: number;
+      algorithm: number;
+      private_key: string;
+      public_key: Buffer;
+      key_tag: number;
+      active: number;
+    } | undefined;
+    if (!row) return null;
+    return {
+      id: row.id,
+      zoneId: row.zone_id,
+      flags: row.flags,
+      algorithm: row.algorithm,
+      privateKey: row.private_key,
+      publicKey: row.public_key,
+      keyTag: row.key_tag,
+      active: row.active,
+    };
+  },
+
+  setActive(id: number, active: boolean) {
+    const stmt = db.prepare('UPDATE zone_keys SET active = ?, updatedAt = ? WHERE id = ?');
+    stmt.run(active ? 1 : 0, Date.now(), id);
+  },
+
+  delete(id: number) {
+    const stmt = db.prepare('DELETE FROM zone_keys WHERE id = ?');
+    stmt.run(id);
   },
 };
 

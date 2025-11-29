@@ -175,7 +175,7 @@ function createDNSQueryFromParams(domain: string, type: string, dnssecOK: boolea
 
   // Add EDNS(0) if DNSSEC is requested
   if (dnssecOK) {
-    query = addEDNS0(query, true);
+    query = Buffer.from(addEDNS0(query, true));
   }
 
   return query;
@@ -603,7 +603,7 @@ app.all('/dns-query', async (c) => {
         'Access-Control-Allow-Headers': 'Content-Type, Accept',
       });
     } else {
-      return c.body(response, 200, {
+      return c.body(Buffer.from(response), 200, {
         'Content-Type': 'application/dns-message',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Access-Control-Allow-Origin': '*',
