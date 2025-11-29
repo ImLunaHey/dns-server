@@ -612,7 +612,9 @@ app.all('/dns-query', async (c) => {
       });
     }
   } catch (error) {
-    logger.error('DoH error', error instanceof Error ? error : new Error(String(error)));
+    logger.error('DoH error', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
     return c.text('Internal server error', 500);
   }
 });
@@ -664,7 +666,9 @@ app.post('/api/dns/test', requireAuth, async (c) => {
       rawResponse: response.toString('base64'),
     });
   } catch (error) {
-    logger.error('DNS test error', error instanceof Error ? error : new Error(String(error)));
+    logger.error('DNS test error', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
     return c.json(
       {
         success: false,
@@ -1270,6 +1274,7 @@ app.get('/api/settings', requireAuth, (c) => {
     dotPort: parseInt(dbSettings.get('dotPort', '853'), 10),
     dotCertPath: dbSettings.get('dotCertPath', ''),
     dotKeyPath: dbSettings.get('dotKeyPath', ''),
+    dnssecValidation: dbSettings.get('dnssecValidation', 'false') === 'true',
   });
 });
 
@@ -1289,6 +1294,7 @@ app.put('/api/settings', requireAuth, async (c) => {
     dotPort,
     dotCertPath,
     dotKeyPath,
+    dnssecValidation,
   } = await c.req.json();
 
   if (upstreamDNS && typeof upstreamDNS === 'string') {
@@ -1374,6 +1380,10 @@ app.put('/api/settings', requireAuth, async (c) => {
     dbSettings.set('dotKeyPath', dotKeyPath);
   }
 
+  if (typeof dnssecValidation === 'boolean') {
+    dbSettings.set('dnssecValidation', dnssecValidation.toString());
+  }
+
   // Restart DoT server if settings changed
   if (dotSettingsChanged) {
     logger.info('Restarting DoT server due to settings change...');
@@ -1381,7 +1391,9 @@ app.put('/api/settings', requireAuth, async (c) => {
       await dnsServer.restartDoT();
       logger.info('DoT server restarted with new settings');
     } catch (error) {
-      logger.error('Failed to restart DoT server', error instanceof Error ? error : new Error(String(error)));
+      logger.error('Failed to restart DoT server', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
       // Don't fail the request, just log the error
     }
   } else if (typeof dotEnabled === 'boolean' || dotPort || dotCertPath || dotKeyPath) {
@@ -1851,7 +1863,9 @@ app.post('/api/zones', requireAuth, async (c) => {
     const zone = dbZones.getById(zoneId);
     return c.json(zone, 201);
   } catch (error) {
-    logger.error('Error creating zone', error instanceof Error ? error : new Error(String(error)));
+    logger.error('Error creating zone', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
     return c.json({ error: (error as Error).message }, 400);
   }
 });
@@ -1876,7 +1890,9 @@ app.put('/api/zones/:id', requireAuth, async (c) => {
     }
     return c.json(zone);
   } catch (error) {
-    logger.error('Error updating zone', error instanceof Error ? error : new Error(String(error)));
+    logger.error('Error updating zone', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
     return c.json({ error: (error as Error).message }, 400);
   }
 });
@@ -1907,7 +1923,9 @@ app.post('/api/zones/:id/records', requireAuth, async (c) => {
     const record = dbZoneRecords.getById(recordId);
     return c.json(record, 201);
   } catch (error) {
-    logger.error('Error creating zone record', error instanceof Error ? error : new Error(String(error)));
+    logger.error('Error creating zone record', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
     return c.json({ error: (error as Error).message }, 400);
   }
 });
@@ -1925,7 +1943,9 @@ app.put('/api/zones/records/:id', requireAuth, async (c) => {
     const updatedRecord = dbZoneRecords.getById(id);
     return c.json(updatedRecord);
   } catch (error) {
-    logger.error('Error updating zone record', error instanceof Error ? error : new Error(String(error)));
+    logger.error('Error updating zone record', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
     return c.json({ error: (error as Error).message }, 400);
   }
 });
@@ -2192,7 +2212,9 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
 
     return c.json({ success: true, message: 'Import completed successfully' });
   } catch (error) {
-    logger.error('Import error', error instanceof Error ? error : new Error(String(error)));
+    logger.error('Import error', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
     return c.json({ error: 'Import failed', details: error instanceof Error ? error.message : 'Unknown error' }, 500);
   }
 });
@@ -2230,11 +2252,15 @@ async function runScheduledTasks() {
             logger.info('Scheduled blocklist update completed', { blocklistSize });
           })
           .catch((error) => {
-            logger.error('Scheduled blocklist update failed', error instanceof Error ? error : new Error(String(error)));
+            logger.error('Scheduled blocklist update failed', {
+              error: error instanceof Error ? error : new Error(String(error)),
+            });
             dbBlocklistUpdates.failUpdate(updateId, error instanceof Error ? error.message : 'Unknown error');
           });
       } catch (error) {
-        logger.error('Error running scheduled blocklist update', error instanceof Error ? error : new Error(String(error)));
+        logger.error('Error running scheduled blocklist update', {
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
       }
     }
 
@@ -2261,13 +2287,17 @@ async function main() {
   // Start scheduled tasks runner
   setInterval(() => {
     runScheduledTasks().catch((error) => {
-      logger.error('Error running scheduled tasks', error instanceof Error ? error : new Error(String(error)));
+      logger.error('Error running scheduled tasks', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
     });
   }, 60000); // Check every minute
 
   // Run immediately on startup
   runScheduledTasks().catch((error) => {
-    logger.error('Error running scheduled tasks', error instanceof Error ? error : new Error(String(error)));
+    logger.error('Error running scheduled tasks', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
   });
 
   // Start HTTP API server
@@ -2281,6 +2311,8 @@ async function main() {
 }
 
 main().catch((error) => {
-  logger.error('Fatal error in main', error instanceof Error ? error : new Error(String(error)));
+  logger.error('Fatal error in main', {
+    error: error instanceof Error ? error : new Error(String(error)),
+  });
   process.exit(1);
 });

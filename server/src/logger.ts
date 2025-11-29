@@ -143,9 +143,14 @@ class Logger {
     }
   }
 
-  error(message: string, error?: Error, context?: Record<string, unknown>): void {
+  error(message: string, context?: Record<string, unknown> & { error?: Error }): void {
     if (this.shouldLog('error')) {
-      console.error(this.formatMessage('error', message, context, error));
+      const error = context?.error;
+      const contextWithoutError = context ? { ...context } : undefined;
+      if (contextWithoutError && 'error' in contextWithoutError) {
+        delete contextWithoutError.error;
+      }
+      console.error(this.formatMessage('error', message, contextWithoutError, error));
     }
   }
 }

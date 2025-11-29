@@ -25,6 +25,7 @@ import {
   dbZoneRecords,
 } from './db.js';
 import { logger } from './logger.js';
+import { validateDNSSEC } from './dnssec-validator.js';
 
 export interface DNSQuery {
   id: string;
@@ -211,7 +212,9 @@ export class DNSServer {
 
       return minTTL;
     } catch (error) {
-      logger.error('Error extracting TTL from response', error instanceof Error ? error : new Error(String(error)));
+      logger.error('Error extracting TTL from response', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
       return null;
     }
   }
@@ -291,7 +294,9 @@ export class DNSServer {
         logger.info('Loaded cache entries from database', { loaded, expired });
       }
     } catch (error) {
-      logger.error('Error loading cache from database', error instanceof Error ? error : new Error(String(error)));
+      logger.error('Error loading cache from database', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
     }
   }
 
@@ -356,7 +361,10 @@ export class DNSServer {
         domains.forEach((domain) => this.blocklist.add(domain));
         logger.info('Loaded domains from blocklist', { count: domains.length, url });
       } catch (error) {
-        logger.error('Failed to load blocklist', error instanceof Error ? error : new Error(String(error)), { url });
+        logger.error('Failed to load blocklist', {
+          error: error instanceof Error ? error : new Error(String(error)),
+          url,
+        });
       }
     }
     logger.info('Total blocked domains', { count: this.blocklist.size });
@@ -510,7 +518,7 @@ export class DNSServer {
     return { blocked: false };
   }
 
-  private parseDNSQuery(msg: Buffer): { id: number; domain: string; type: number } | null {
+  private parseDNSQuery(msg: Buffer): { id: number; domain: string; type: number; wantsDNSSEC: boolean } | null {
     try {
       if (msg.length < 12) return null;
 
@@ -561,10 +569,29 @@ export class DNSServer {
       }
 
       const type = msg.readUInt16BE(offset);
+      offset += 4; // Skip QTYPE and QCLASS
 
-      return { id, domain, type };
+      // Check for EDNS(0) OPT record in additional section
+      let wantsDNSSEC = false;
+      const arCount = msg.readUInt16BE(10);
+      if (arCount > 0 && offset < msg.length) {
+        // Look for OPT record (type 41)
+        // OPT record name is root (0x00), so check if next byte is 0
+        if (msg[offset] === 0 && offset + 11 <= msg.length) {
+          const optType = msg.readUInt16BE(offset + 1);
+          if (optType === 41) {
+            // OPT record found, check DO bit (bit 15 of flags at offset + 5)
+            const optFlags = msg.readUInt16BE(offset + 5);
+            wantsDNSSEC = (optFlags & 0x8000) !== 0;
+          }
+        }
+      }
+
+      return { id, domain, type, wantsDNSSEC };
     } catch (error) {
-      logger.error('Error parsing DNS query', error instanceof Error ? error : new Error(String(error)));
+      logger.error('Error parsing DNS query', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
       return null;
     }
   }
@@ -642,7 +669,17 @@ export class DNSServer {
     queryMsg: Buffer,
     domain: string,
     queryType: number,
-    zone: { id: number; domain: string; soa_serial: number; soa_refresh: number; soa_retry: number; soa_expire: number; soa_minimum: number; soa_mname: string; soa_rname: string },
+    zone: {
+      id: number;
+      domain: string;
+      soa_serial: number;
+      soa_refresh: number;
+      soa_retry: number;
+      soa_expire: number;
+      soa_minimum: number;
+      soa_mname: string;
+      soa_rname: string;
+    },
   ): Buffer | null {
     const zoneRecords = dbZoneRecords.getByZone(zone.id);
     const domainLower = domain.toLowerCase();
@@ -732,14 +769,31 @@ export class DNSServer {
     if (answers.length > 0) {
       for (const record of answers) {
         logger.debug('Adding answer record', { offset, questionNameStart, type: record.type, domain });
-        offset = this.addResourceRecord(response, offset, questionNameStart, domain, record.type, record.ttl, record.data, record.priority);
+        offset = this.addResourceRecord(
+          response,
+          offset,
+          questionNameStart,
+          domain,
+          record.type,
+          record.ttl,
+          record.data,
+          record.priority,
+        );
         answerCount++;
       }
     } else {
       // NXDOMAIN - no records found, include SOA in authority section
       response.writeUInt16BE(flags | 0x8583, 2); // Set NXDOMAIN (RCODE = 3)
       const soaData = `${zone.soa_mname} ${zone.soa_rname} ${zone.soa_serial} ${zone.soa_refresh} ${zone.soa_retry} ${zone.soa_expire} ${zone.soa_minimum}`;
-      offset = this.addResourceRecord(response, questionEnd, questionNameStart, zone.domain, 'SOA', zone.soa_minimum, soaData);
+      offset = this.addResourceRecord(
+        response,
+        questionEnd,
+        questionNameStart,
+        zone.domain,
+        'SOA',
+        zone.soa_minimum,
+        soaData,
+      );
       authorityCount = 1;
     }
 
@@ -1005,7 +1059,8 @@ export class DNSServer {
     try {
       dbQueries.insert(query);
     } catch (error) {
-      logger.error('Failed to save query to database', error instanceof Error ? error : new Error(String(error)), {
+      logger.error('Failed to save query to database', {
+        error: error instanceof Error ? error : new Error(String(error)),
         queryId: query.id,
         domain: query.domain,
       });
@@ -1273,7 +1328,7 @@ export class DNSServer {
       throw new Error('Failed to parse DNS query');
     }
 
-    const { id, domain, type } = parsed;
+    const { id, domain, type, wantsDNSSEC } = parsed;
 
     // Check rate limiting first
     if (this.rateLimitEnabled && clientIp) {
@@ -1343,6 +1398,15 @@ export class DNSServer {
         } else {
           try {
             response = await this.forwardQuery(msg, domain, clientIp, useTcp);
+            // Validate DNSSEC if requested
+            if (wantsDNSSEC && dbSettings.get('dnssecValidation', 'false') === 'true') {
+              const validation = validateDNSSEC(response, domain, type);
+              if (!validation.valid) {
+                logger.warn('DNSSEC validation failed', { domain, type, reason: validation.reason });
+              } else {
+                logger.debug('DNSSEC validation passed', { domain, type, validatedRecords: validation.validatedRecords });
+              }
+            }
             this.setCachedResponse(domain, type, response);
             logger.debug('Allowed', { domain, type });
           } catch (error) {
@@ -1361,6 +1425,15 @@ export class DNSServer {
       } else {
         try {
           response = await this.forwardQuery(msg, domain, clientIp, useTcp);
+          // Validate DNSSEC if requested
+          if (wantsDNSSEC && dbSettings.get('dnssecValidation', 'false') === 'true') {
+            const validation = validateDNSSEC(response, domain, type);
+            if (!validation.valid) {
+              logger.warn('DNSSEC validation failed', { domain, type, reason: validation.reason });
+            } else {
+              logger.debug('DNSSEC validation passed', { domain, type, validatedRecords: validation.validatedRecords });
+            }
+          }
           this.setCachedResponse(domain, type, response);
           logger.debug('Allowed', { domain, type });
         } catch (error) {
@@ -1417,7 +1490,8 @@ export class DNSServer {
             responseLength.writeUInt16BE(response.length, 0);
             socket.write(Buffer.concat([responseLength, response]));
           } catch (error) {
-            logger.error('Error handling DNS query', error instanceof Error ? error : new Error(String(error)), {
+            logger.error('Error handling DNS query', {
+              error: error instanceof Error ? error : new Error(String(error)),
               clientIp,
               useTcp: true,
             });
@@ -1434,7 +1508,9 @@ export class DNSServer {
     });
 
     socket.on('error', (err) => {
-      logger.error('Connection error', err instanceof Error ? err : new Error(String(err)));
+      logger.error('Connection error', {
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
     });
 
     socket.on('close', () => {
@@ -1449,7 +1525,8 @@ export class DNSServer {
           const response = await this.handleDNSQuery(msg, rinfo.address, false);
           this.server.send(response, rinfo.port, rinfo.address);
         } catch (error) {
-          logger.error('Error handling UDP query', error instanceof Error ? error : new Error(String(error)), {
+          logger.error('Error handling UDP query', {
+            error: error instanceof Error ? error : new Error(String(error)),
             clientIp: rinfo.address,
           });
           const errorResponse = this.createDNSResponse(msg, true);
@@ -1458,7 +1535,9 @@ export class DNSServer {
       });
 
       this.server.on('error', (err) => {
-        logger.error('UDP DNS server error', err instanceof Error ? err : new Error(String(err)));
+        logger.error('UDP DNS server error', {
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
         reject(err);
       });
 
@@ -1476,7 +1555,9 @@ export class DNSServer {
       });
 
       this.tcpServer.on('error', (err) => {
-        logger.error('TCP DNS server error', err instanceof Error ? err : new Error(String(err)));
+        logger.error('TCP DNS server error', {
+          error: err instanceof Error ? err : new Error(String(err)),
+        });
         reject(err);
       });
 
@@ -1558,7 +1639,8 @@ export class DNSServer {
 
       // Check if files exist before trying to read them
       if (!existsSync(certPath)) {
-        logger.error('Certificate file not found', new Error(`Certificate file not found: ${certPath}`), {
+        logger.error('Certificate file not found', {
+          error: new Error(`Certificate file not found: ${certPath}`),
           certPath,
           originalPath: dbSettings.get('dotCertPath', ''),
           projectRoot,
@@ -1566,7 +1648,8 @@ export class DNSServer {
         throw new Error(`Certificate file not found: ${certPath}`);
       }
       if (!existsSync(keyPath)) {
-        logger.error('Private key file not found', new Error(`Private key file not found: ${keyPath}`), {
+        logger.error('Private key file not found', {
+          error: new Error(`Private key file not found: ${keyPath}`),
           keyPath,
           originalPath: dbSettings.get('dotKeyPath', ''),
           projectRoot,
@@ -1588,7 +1671,9 @@ export class DNSServer {
         });
 
         this.dotServer.on('error', (err) => {
-          logger.error('DoT server error', err instanceof Error ? err : new Error(String(err)));
+          logger.error('DoT server error', {
+            error: err instanceof Error ? err : new Error(String(err)),
+          });
           reject(err);
         });
 

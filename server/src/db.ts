@@ -334,7 +334,9 @@ try {
     db.exec('ALTER TABLE queries ADD COLUMN cached INTEGER DEFAULT 0');
   }
 } catch (error) {
-  logger.error('Error running migrations', error instanceof Error ? error : new Error(String(error)));
+  logger.error('Error running migrations', {
+    error: error instanceof Error ? error : new Error(String(error)),
+  });
 }
 
 export const dbQueries = {
