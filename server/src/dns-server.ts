@@ -121,11 +121,78 @@ export class DNSServer {
     return cached.response;
   }
 
+  /**
+   * Extract the minimum TTL from a DNS response.
+   * Returns the minimum TTL found in answer records, or null if parsing fails.
+   */
+  private extractTTLFromResponse(response: Buffer): number | null {
+    try {
+      if (response.length < 12) return null;
+
+      const anCount = response.readUInt16BE(6);
+      if (anCount === 0) return null;
+
+      let offset = 12;
+      // Skip question section
+      while (offset < response.length && response[offset] !== 0) {
+        const length = response[offset];
+        offset += length + 1;
+      }
+      if (offset + 4 > response.length) return null;
+      offset += 5; // Skip null terminator and QTYPE/QCLASS
+
+      let minTTL: number | null = null;
+
+      // Parse answer section to find minimum TTL
+      for (let i = 0; i < anCount && offset < response.length; i++) {
+        // Parse domain name (can be compressed)
+        while (offset < response.length) {
+          const labelLen = response[offset];
+          if (labelLen === 0) {
+            offset += 1;
+            break;
+          } else if ((labelLen & 0xc0) === 0xc0) {
+            // Compression pointer
+            offset += 2;
+            break;
+          } else {
+            offset += labelLen + 1;
+          }
+        }
+
+        if (offset + 10 > response.length) break;
+
+        // Read TTL (4 bytes at offset + 4)
+        const ttl = response.readUInt32BE(offset + 4);
+        if (minTTL === null || ttl < minTTL) {
+          minTTL = ttl;
+        }
+
+        // Skip TYPE, CLASS, TTL, and DATA LENGTH
+        const dataLength = response.readUInt16BE(offset + 8);
+        offset += 10 + dataLength;
+      }
+
+      return minTTL;
+    } catch (error) {
+      console.error('Error extracting TTL from response:', error);
+      return null;
+    }
+  }
+
   private setCachedResponse(domain: string, type: number, response: Buffer) {
     if (!this.cacheEnabled) return;
 
     const key = this.getCacheKey(domain, type);
-    const expiresAt = Date.now() + this.cacheTTL * 1000;
+    
+    // Extract TTL from DNS response, or fall back to configured cacheTTL
+    const responseTTL = this.extractTTLFromResponse(response);
+    // Use the minimum of response TTL and configured max TTL
+    const ttl = responseTTL !== null 
+      ? Math.min(responseTTL, this.cacheTTL) 
+      : this.cacheTTL;
+    
+    const expiresAt = Date.now() + ttl * 1000;
 
     this.cache.set(key, {
       response,
