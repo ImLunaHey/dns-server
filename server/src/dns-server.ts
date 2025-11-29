@@ -31,12 +31,14 @@ export interface DNSQuery {
   responseTime?: number;
   clientIp?: string;
   blockReason?: string; // e.g., "blocklist", "regex", "client-blocklist", "group-blocklist"
+  cached?: boolean; // Whether this query was served from cache
 }
 
 export interface DNSStats {
   totalQueries: number;
   blockedQueries: number;
   allowedQueries: number;
+  cachedQueries: number;
   topDomains: Map<string, number>;
   topBlocked: Map<string, number>;
   topClients: Map<string, number>;
@@ -683,7 +685,6 @@ export class DNSServer {
       doh: boolean;
     };
   } {
-
     const errorRate = this.queryCount > 0 ? (this.errorCount / this.queryCount) * 100 : 0;
     const queriesPerSecond = this.queryRateHistory.length;
     const uptimeMinutesTotal = Math.floor((Date.now() - this.startTime) / 60000);
@@ -762,6 +763,7 @@ export class DNSServer {
       totalQueries: dbStats.totalQueries,
       blockedQueries: dbStats.blockedQueries,
       allowedQueries: dbStats.allowedQueries,
+      cachedQueries: dbStats.cachedQueries,
       topDomains: new Map(), // Not used, kept for interface compatibility
       topBlocked: new Map(), // Not used, kept for interface compatibility
       topClients: new Map(), // Not used, kept for interface compatibility
@@ -876,15 +878,7 @@ export class DNSServer {
     const blocked = blockResult.blocked;
 
     const queryId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const query: DNSQuery = {
-      id: queryId,
-      domain,
-      type: type === 1 ? 'A' : type === 28 ? 'AAAA' : `TYPE${type}`,
-      blocked,
-      timestamp: Date.now(),
-      clientIp,
-      blockReason: blockResult.reason,
-    };
+    let isCached = false;
 
     let response: Buffer;
 
@@ -909,6 +903,7 @@ export class DNSServer {
         const cached = this.getCachedResponse(domain, type);
         if (cached) {
           response = cached;
+          isCached = true;
           console.log(`💾 Cached: ${domain}`);
         } else {
           try {
@@ -926,6 +921,7 @@ export class DNSServer {
       const cached = this.getCachedResponse(domain, type);
       if (cached) {
         response = cached;
+        isCached = true;
         console.log(`💾 Cached: ${domain}`);
       } else {
         try {
@@ -939,7 +935,18 @@ export class DNSServer {
       }
     }
 
-    query.responseTime = Date.now() - startTime;
+    const query: DNSQuery = {
+      id: queryId,
+      domain,
+      type: type === 1 ? 'A' : type === 28 ? 'AAAA' : `TYPE${type}`,
+      blocked,
+      timestamp: Date.now(),
+      clientIp,
+      blockReason: blockResult.reason,
+      cached: isCached,
+      responseTime: Date.now() - startTime,
+    };
+
     this.addQuery(query);
 
     return response;

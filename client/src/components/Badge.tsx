@@ -2,7 +2,7 @@ import { cn } from "../lib/cn";
 
 interface BadgeProps {
   children: React.ReactNode;
-  color?: "red" | "green" | "blue" | "yellow" | "gray" | "purple";
+  color?: "red" | "green" | "blue" | "yellow" | "gray" | "purple" | "orange";
   size?: "sm" | "md";
   className?: string;
 }
@@ -20,6 +20,7 @@ export function Badge({
     yellow: "bg-yellow-100 dark:bg-yellow-900/50 text-yellow-800 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-700",
     gray: "bg-gray-100 dark:bg-gray-900/50 text-gray-800 dark:text-gray-300 border border-gray-300 dark:border-gray-700",
     purple: "bg-purple-100 dark:bg-purple-900/50 text-purple-800 dark:text-purple-300 border border-purple-300 dark:border-purple-700",
+    orange: "bg-orange-100 dark:bg-orange-900/50 text-orange-800 dark:text-orange-300 border border-orange-300 dark:border-orange-700",
   };
 
   const sizeClasses = {

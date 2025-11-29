@@ -117,6 +117,17 @@ export function QueryLog({ queries, clientNames = {}, onBlock, onAllow }: QueryL
             className: "whitespace-nowrap",
           },
           {
+            header: "Cached",
+            accessor: (row) => {
+              if (row.cached) {
+                return <Badge color="orange">Cached</Badge>;
+              }
+              return <span className="text-gray-500 dark:text-gray-500">-</span>;
+            },
+            className: "whitespace-nowrap",
+            hideOnMobile: true,
+          },
+          {
             header: "Response",
             accessor: (row) => row.responseTime ? `${row.responseTime}ms` : '-',
             className: "whitespace-nowrap text-gray-600 dark:text-gray-400",

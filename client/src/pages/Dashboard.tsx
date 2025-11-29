@@ -1,21 +1,23 @@
-import { useStats } from '../hooks/useStats';
-import { useQueries } from '../hooks/useQueries';
-import { useClientNames } from '../hooks/useClientNames';
-import { useBlockDomain, useAllowDomain } from '../hooks/useBlocklistMutations';
-import { StatsCard } from '../components/StatsCard';
-import { QueryLog } from '../components/QueryLog';
-import { RankedList } from '../components/RankedList';
-import { QueryDistributionChart } from '../components/QueryDistributionChart';
-import { QueryTypesChart } from '../components/QueryTypesChart';
-import { QueriesOverTimeChart } from '../components/QueriesOverTimeChart';
-import { BlockPercentageChart } from '../components/BlockPercentageChart';
-import { TopAdvertisers } from '../components/TopAdvertisers';
-import { Loading } from '../components/Loading';
-import { PageHeader } from '../components/PageHeader';
+import { useStats } from "../hooks/useStats";
+import { useQueries } from "../hooks/useQueries";
+import { useClientNames } from "../hooks/useClientNames";
+import { useBlockDomain, useAllowDomain } from "../hooks/useBlocklistMutations";
+import { StatsCard } from "../components/StatsCard";
+import { QueryLog } from "../components/QueryLog";
+import { RankedList } from "../components/RankedList";
+import { QueryDistributionChart } from "../components/QueryDistributionChart";
+import { QueryTypesChart } from "../components/QueryTypesChart";
+import { QueriesOverTimeChart } from "../components/QueriesOverTimeChart";
+import { BlockPercentageChart } from "../components/BlockPercentageChart";
+import { TopAdvertisers } from "../components/TopAdvertisers";
+import { Loading } from "../components/Loading";
+import { PageHeader } from "../components/PageHeader";
 
 export function Dashboard() {
   const { data: stats, isLoading: statsLoading } = useStats();
-  const { data: queries = [], isLoading: queriesLoading } = useQueries({ limit: 50 });
+  const { data: queries = [], isLoading: queriesLoading } = useQueries({
+    limit: 50,
+  });
   const { data: clientNames = {} } = useClientNames();
   const blockMutation = useBlockDomain();
   const allowMutation = useAllowDomain();
@@ -36,7 +38,7 @@ export function Dashboard() {
 
   const blockRate = stats
     ? ((stats.blockedQueries / stats.totalQueries) * 100).toFixed(1)
-    : '0';
+    : "0";
 
   return (
     <>
@@ -48,26 +50,38 @@ export function Dashboard() {
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 md:py-8">
         {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
           <StatsCard
             title="Total Queries"
-            value={stats?.totalQueries.toLocaleString() || '0'}
+            value={stats?.totalQueries.toLocaleString() || "0"}
             color="blue"
           />
           <StatsCard
             title="Blocked"
-            value={stats?.blockedQueries.toLocaleString() || '0'}
+            value={stats?.blockedQueries.toLocaleString() || "0"}
             subtitle={`${blockRate}% of total`}
             color="red"
           />
           <StatsCard
             title="Allowed"
-            value={stats?.allowedQueries.toLocaleString() || '0'}
+            value={stats?.allowedQueries.toLocaleString() || "0"}
             color="green"
           />
           <StatsCard
+            title="Cached"
+            value={stats?.cachedQueries.toLocaleString() || "0"}
+            subtitle={
+              stats?.totalQueries
+                ? `${((stats.cachedQueries / stats.totalQueries) * 100).toFixed(
+                    1
+                  )}% of total`
+                : undefined
+            }
+            color="orange"
+          />
+          <StatsCard
             title="Blocklist Size"
-            value={stats?.blocklistSize.toLocaleString() || '0'}
+            value={stats?.blocklistSize.toLocaleString() || "0"}
             subtitle="domains blocked"
             color="purple"
           />
@@ -101,25 +115,30 @@ export function Dashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
           <RankedList
             title="Top Queried Domains"
-            items={(stats?.topDomainsArray || []).map(item => ({ label: item.domain, value: item.count }))}
+            items={(stats?.topDomainsArray || []).map((item) => ({
+              label: item.domain,
+              value: item.count,
+            }))}
             color="blue"
           />
           <RankedList
             title="Top Blocked Domains"
-            items={(stats?.topBlockedArray || []).map(item => ({ label: item.domain, value: item.count }))}
+            items={(stats?.topBlockedArray || []).map((item) => ({
+              label: item.domain,
+              value: item.count,
+            }))}
             color="red"
           />
         </div>
 
         {/* Query Log */}
-        <QueryLog 
-          queries={queries} 
+        <QueryLog
+          queries={queries}
           clientNames={clientNames}
-          onBlock={handleBlock} 
-          onAllow={handleAllow} 
+          onBlock={handleBlock}
+          onAllow={handleAllow}
         />
       </main>
     </>
   );
 }
-

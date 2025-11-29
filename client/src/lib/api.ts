@@ -16,6 +16,7 @@ export interface DNSQuery {
   responseTime?: number;
   clientIp?: string;
   blockReason?: string;
+  cached?: boolean;
 }
 
 export interface ServerHealth {
@@ -38,6 +39,7 @@ export interface DNSStats {
   totalQueries: number;
   blockedQueries: number;
   allowedQueries: number;
+  cachedQueries: number;
   blocklistSize: number;
   topDomainsArray: Array<{ domain: string; count: number }>;
   topBlockedArray: Array<{ domain: string; count: number }>;

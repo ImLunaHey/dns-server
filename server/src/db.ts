@@ -15,7 +15,8 @@ db.exec(`
     timestamp INTEGER NOT NULL,
     responseTime INTEGER,
     clientIp TEXT,
-    blockReason TEXT
+    blockReason TEXT,
+    cached INTEGER DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS client_names (
@@ -275,13 +276,17 @@ db.exec(`
 
 // Migrations: Add missing columns to existing tables
 try {
-  // Check if blockReason column exists
   const tableInfo = db.prepare('PRAGMA table_info(queries)').all() as Array<{ name: string }>;
-  const hasBlockReason = tableInfo.some((col) => col.name === 'blockReason');
+  const columnNames = tableInfo.map((col) => col.name);
 
-  if (!hasBlockReason) {
+  if (!columnNames.includes('blockReason')) {
     console.log('Adding blockReason column to queries table...');
     db.exec('ALTER TABLE queries ADD COLUMN blockReason TEXT');
+  }
+
+  if (!columnNames.includes('cached')) {
+    console.log('Adding cached column to queries table...');
+    db.exec('ALTER TABLE queries ADD COLUMN cached INTEGER DEFAULT 0');
   }
 } catch (error) {
   console.error('Error running migrations:', error);
@@ -294,8 +299,8 @@ export const dbQueries = {
     const clientIp = privacyMode ? null : query.clientIp ?? null;
 
     const stmt = db.prepare(`
-      INSERT INTO queries (id, domain, type, blocked, timestamp, responseTime, clientIp, blockReason)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO queries (id, domain, type, blocked, timestamp, responseTime, clientIp, blockReason, cached)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       query.id,
@@ -306,12 +311,14 @@ export const dbQueries = {
       query.responseTime ?? null,
       clientIp,
       query.blockReason ?? null,
+      query.cached ? 1 : 0,
     );
   },
 
   getRecent(limit: number = 100): DNSQuery[] {
     const stmt = db.prepare(`
-      SELECT * FROM queries
+      SELECT id, domain, type, blocked, timestamp, responseTime, clientIp, blockReason, cached
+      FROM queries
       ORDER BY timestamp DESC
       LIMIT ?
     `);
@@ -324,6 +331,7 @@ export const dbQueries = {
       responseTime: number | null;
       clientIp: string | null;
       blockReason: string | null;
+      cached: number;
     }>;
 
     const privacyMode = dbSettings.get('privacyMode', 'false') === 'true';
@@ -337,6 +345,7 @@ export const dbQueries = {
       responseTime: row.responseTime ?? undefined,
       clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
       blockReason: row.blockReason ?? undefined,
+      cached: row.cached === 1,
     }));
   },
 
@@ -361,6 +370,7 @@ export const dbQueries = {
       responseTime: number | null;
       clientIp: string | null;
       blockReason: string | null;
+      cached: number;
     }>;
 
     return rows.map((row) => ({
@@ -372,6 +382,7 @@ export const dbQueries = {
       responseTime: row.responseTime ?? undefined,
       clientIp: row.clientIp ?? undefined,
       blockReason: row.blockReason ?? undefined,
+      cached: row.cached === 1,
     }));
   },
 
@@ -390,6 +401,7 @@ export const dbQueries = {
       responseTime: number | null;
       clientIp: string | null;
       blockReason: string | null;
+      cached: number;
     }>;
 
     const privacyMode = dbSettings.get('privacyMode', 'false') === 'true';
@@ -403,6 +415,7 @@ export const dbQueries = {
       responseTime: row.responseTime ?? undefined,
       clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
       blockReason: row.blockReason ?? undefined,
+      cached: row.cached === 1,
     }));
   },
 
@@ -469,6 +482,7 @@ export const dbQueries = {
       responseTime: number | null;
       clientIp: string | null;
       blockReason: string | null;
+      cached: number;
     }>;
 
     const privacyMode = dbSettings.get('privacyMode', 'false') === 'true';
@@ -482,6 +496,7 @@ export const dbQueries = {
       responseTime: row.responseTime ?? undefined,
       clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
       blockReason: row.blockReason ?? undefined,
+      cached: row.cached === 1,
     }));
   },
 
@@ -552,7 +567,7 @@ export const dbQueries = {
 
   archiveOldQueries(daysToKeep: number = 7, compress: boolean = true): number {
     const cutoffTime = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
-    
+
     // Get old queries
     const stmt = db.prepare('SELECT * FROM queries WHERE timestamp < ?');
     const oldQueries = stmt.all(cutoffTime) as Array<{
@@ -630,6 +645,9 @@ export const dbQueries = {
     const blockedStmt = db.prepare('SELECT COUNT(*) as count FROM queries WHERE blocked = 1');
     const blockedQueries = (blockedStmt.get() as { count: number }).count;
 
+    const cachedStmt = db.prepare('SELECT COUNT(*) as count FROM queries WHERE cached = 1');
+    const cachedQueries = (cachedStmt.get() as { count: number }).count;
+
     const allowedQueries = totalQueries - blockedQueries;
 
     const topDomainsStmt = db.prepare(`
@@ -655,6 +673,7 @@ export const dbQueries = {
       totalQueries,
       blockedQueries,
       allowedQueries,
+      cachedQueries,
       topDomains,
       topBlocked,
     };
@@ -1650,13 +1669,7 @@ export const dbBlockPageSettings = {
     );
   },
 
-  update(settings: {
-    title?: string;
-    message?: string;
-    backgroundColor?: string;
-    textColor?: string;
-    logoUrl?: string;
-  }) {
+  update(settings: { title?: string; message?: string; backgroundColor?: string; textColor?: string; logoUrl?: string }) {
     const existing = this.get();
     const stmt = db.prepare(`
       INSERT INTO block_page_settings (id, title, message, backgroundColor, textColor, logoUrl, updatedAt)
