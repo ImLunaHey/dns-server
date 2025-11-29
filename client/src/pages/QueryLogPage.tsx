@@ -146,41 +146,54 @@ export function QueryLogPage() {
             Archive Old Queries
           </Button>
           <Button
-            onClick={() => {
-              // Export as CSV
-              const headers = ['Time', 'Domain', 'Type', 'Status', 'Client', 'Response Time (ms)'];
-              const rows = queries.map(q => [
-                new Date(q.timestamp).toISOString(),
-                q.domain,
-                q.type,
-                q.blocked ? 'Blocked' : 'Allowed',
-                q.clientIp || '-',
-                q.responseTime?.toString() || '-',
-              ]);
-              const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-              const blob = new Blob([csv], { type: 'text/csv' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `dns-queries-${new Date().toISOString().split('T')[0]}.csv`;
-              a.click();
-              URL.revokeObjectURL(url);
+            onClick={async () => {
+              try {
+                const filters = {
+                  clientIp,
+                  type: type || undefined,
+                  blocked,
+                  startTime,
+                  endTime,
+                  domain: domainSearch || undefined,
+                };
+                const blob = await api.exportQueriesCSV(filters);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `dns-queries-${new Date().toISOString().split('T')[0]}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+              } catch (error) {
+                alert(error instanceof Error ? error.message : 'Failed to export queries');
+              }
             }}
+            variant="outline"
           >
             Export CSV
           </Button>
           <Button
-            onClick={() => {
-              // Export as JSON
-              const json = JSON.stringify(queries, null, 2);
-              const blob = new Blob([json], { type: 'application/json' });
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = `dns-queries-${new Date().toISOString().split('T')[0]}.json`;
-              a.click();
-              URL.revokeObjectURL(url);
+            onClick={async () => {
+              try {
+                const filters = {
+                  clientIp,
+                  type: type || undefined,
+                  blocked,
+                  startTime,
+                  endTime,
+                  domain: domainSearch || undefined,
+                };
+                const blob = await api.exportQueriesJSON(filters);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `dns-queries-${new Date().toISOString().split('T')[0]}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+              } catch (error) {
+                alert(error instanceof Error ? error.message : 'Failed to export queries');
+              }
             }}
+            variant="outline"
           >
             Export JSON
           </Button>

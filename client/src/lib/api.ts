@@ -301,6 +301,52 @@ export const api = {
     }
   },
 
+  async exportQueriesCSV(filters?: {
+    clientIp?: string;
+    type?: string;
+    blocked?: boolean;
+    startTime?: number;
+    endTime?: number;
+    domain?: string;
+  }): Promise<Blob> {
+    const params = new URLSearchParams();
+    if (filters?.clientIp) params.append('clientIp', filters.clientIp);
+    if (filters?.type) params.append('type', filters.type);
+    if (filters?.blocked !== undefined) params.append('blocked', filters.blocked.toString());
+    if (filters?.startTime) params.append('startTime', filters.startTime.toString());
+    if (filters?.endTime) params.append('endTime', filters.endTime.toString());
+    if (filters?.domain) params.append('domain', filters.domain);
+
+    const response = await fetch(`${API_URL}/api/queries/export/csv?${params}`);
+    if (!response.ok) {
+      throw new Error(`Failed to export queries: ${response.statusText}`);
+    }
+    return response.blob();
+  },
+
+  async exportQueriesJSON(filters?: {
+    clientIp?: string;
+    type?: string;
+    blocked?: boolean;
+    startTime?: number;
+    endTime?: number;
+    domain?: string;
+  }): Promise<Blob> {
+    const params = new URLSearchParams();
+    if (filters?.clientIp) params.append('clientIp', filters.clientIp);
+    if (filters?.type) params.append('type', filters.type);
+    if (filters?.blocked !== undefined) params.append('blocked', filters.blocked.toString());
+    if (filters?.startTime) params.append('startTime', filters.startTime.toString());
+    if (filters?.endTime) params.append('endTime', filters.endTime.toString());
+    if (filters?.domain) params.append('domain', filters.domain);
+
+    const response = await fetch(`${API_URL}/api/queries/export/json?${params}`);
+    if (!response.ok) {
+      throw new Error(`Failed to export queries: ${response.statusText}`);
+    }
+    return response.blob();
+  },
+
   async getBlockPageSettings(): Promise<{
     id: number;
     title: string | null;

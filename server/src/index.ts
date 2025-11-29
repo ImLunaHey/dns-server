@@ -690,6 +690,118 @@ app.get('/api/queries', requireAuth, (c) => {
   return c.json(queries);
 });
 
+// Export queries as CSV
+app.get('/api/queries/export/csv', requireAuth, (c) => {
+  const clientIp = c.req.query('clientIp');
+  const type = c.req.query('type');
+  const blocked = c.req.query('blocked');
+  const startTime = c.req.query('startTime');
+  const endTime = c.req.query('endTime');
+  const domain = c.req.query('domain');
+
+  const filters = {
+    clientIp: clientIp || undefined,
+    type: type || undefined,
+    blocked: blocked !== undefined ? blocked === 'true' : undefined,
+    startTime: startTime ? parseInt(startTime, 10) : undefined,
+    endTime: endTime ? parseInt(endTime, 10) : undefined,
+    domain: domain || undefined,
+  };
+
+  const queries = dbQueries.getAllFiltered(filters);
+
+  // CSV header
+  const headers = ['Timestamp', 'Domain', 'Type', 'Status', 'Client IP', 'Response Time (ms)', 'Block Reason', 'Cached'];
+  const csvRows = [headers.join(',')];
+
+  // CSV rows
+  for (const query of queries) {
+    const timestamp = new Date(query.timestamp).toISOString();
+    const status = query.blocked ? 'Blocked' : 'Allowed';
+    const clientIp = query.clientIp || '';
+    const responseTime = query.responseTime?.toString() || '';
+    const blockReason = query.blockReason || '';
+    const cached = query.cached ? 'Yes' : 'No';
+
+    // Escape commas and quotes in CSV
+    const escapeCSV = (value: string) => {
+      if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+        return `"${value.replace(/"/g, '""')}"`;
+      }
+      return value;
+    };
+
+    csvRows.push(
+      [
+        escapeCSV(timestamp),
+        escapeCSV(query.domain),
+        escapeCSV(query.type),
+        escapeCSV(status),
+        escapeCSV(clientIp),
+        escapeCSV(responseTime),
+        escapeCSV(blockReason),
+        escapeCSV(cached),
+      ].join(','),
+    );
+  }
+
+  const csv = csvRows.join('\n');
+  const filename = `dns-queries-${new Date().toISOString().split('T')[0]}.csv`;
+
+  return c.text(csv, 200, {
+    'Content-Type': 'text/csv',
+    'Content-Disposition': `attachment; filename="${filename}"`,
+  });
+});
+
+// Export queries as JSON
+app.get('/api/queries/export/json', requireAuth, (c) => {
+  const clientIp = c.req.query('clientIp');
+  const type = c.req.query('type');
+  const blocked = c.req.query('blocked');
+  const startTime = c.req.query('startTime');
+  const endTime = c.req.query('endTime');
+  const domain = c.req.query('domain');
+
+  const filters = {
+    clientIp: clientIp || undefined,
+    type: type || undefined,
+    blocked: blocked !== undefined ? blocked === 'true' : undefined,
+    startTime: startTime ? parseInt(startTime, 10) : undefined,
+    endTime: endTime ? parseInt(endTime, 10) : undefined,
+    domain: domain || undefined,
+  };
+
+  const queries = dbQueries.getAllFiltered(filters);
+
+  // Format queries for export
+  const exportData = queries.map((query) => ({
+    timestamp: new Date(query.timestamp).toISOString(),
+    domain: query.domain,
+    type: query.type,
+    status: query.blocked ? 'Blocked' : 'Allowed',
+    clientIp: query.clientIp || null,
+    responseTime: query.responseTime || null,
+    blockReason: query.blockReason || null,
+    cached: query.cached || false,
+  }));
+
+  const filename = `dns-queries-${new Date().toISOString().split('T')[0]}.json`;
+
+  return c.json(
+    {
+      exportedAt: new Date().toISOString(),
+      totalQueries: exportData.length,
+      filters: filters,
+      queries: exportData,
+    },
+    200,
+    {
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    },
+  );
+});
+
 app.post('/api/blocklist/add', requireAuth, async (c) => {
   const { domain } = await c.req.json();
   if (!domain) {

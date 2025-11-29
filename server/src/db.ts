@@ -509,6 +509,82 @@ export const dbQueries = {
     }));
   },
 
+  getAllFiltered(filters: {
+    clientIp?: string;
+    type?: string;
+    blocked?: boolean;
+    startTime?: number;
+    endTime?: number;
+    domain?: string;
+  }): DNSQuery[] {
+    const conditions: string[] = [];
+    const values: unknown[] = [];
+
+    if (filters.clientIp) {
+      conditions.push('clientIp = ?');
+      values.push(filters.clientIp);
+    }
+
+    if (filters.type) {
+      conditions.push('type = ?');
+      values.push(filters.type);
+    }
+
+    if (filters.blocked !== undefined) {
+      conditions.push('blocked = ?');
+      values.push(filters.blocked ? 1 : 0);
+    }
+
+    if (filters.startTime) {
+      conditions.push('timestamp >= ?');
+      values.push(filters.startTime);
+    }
+
+    if (filters.endTime) {
+      conditions.push('timestamp <= ?');
+      values.push(filters.endTime);
+    }
+
+    if (filters.domain) {
+      conditions.push('domain LIKE ?');
+      values.push(`%${filters.domain.toLowerCase()}%`);
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const stmt = db.prepare(`
+      SELECT * FROM queries
+      ${whereClause}
+      ORDER BY timestamp DESC
+    `);
+
+    const rows = stmt.all(...values) as Array<{
+      id: string;
+      domain: string;
+      type: string;
+      blocked: number;
+      timestamp: number;
+      responseTime: number | null;
+      clientIp: string | null;
+      blockReason: string | null;
+      cached: number;
+    }>;
+
+    const privacyMode = dbSettings.get('privacyMode', 'false') === 'true';
+
+    return rows.map((row) => ({
+      id: row.id,
+      domain: row.domain,
+      type: row.type,
+      blocked: row.blocked === 1,
+      timestamp: row.timestamp,
+      responseTime: row.responseTime ?? undefined,
+      clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
+      blockReason: row.blockReason ?? undefined,
+      cached: row.cached === 1,
+    }));
+  },
+
   getFilteredCount(filters: {
     clientIp?: string;
     type?: string;
