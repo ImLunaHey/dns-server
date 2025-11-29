@@ -631,6 +631,102 @@ app.get('/api/stats', (c) => {
   return c.json(dnsServer.getStats());
 });
 
+// Export statistics as CSV
+app.get('/api/stats/export/csv', requireAuth, (c) => {
+  const stats = dnsServer.getStats();
+  const csvRows: string[] = [];
+
+  // Helper to escape CSV values
+  const escapeCSV = (value: string | number) => {
+    const str = String(value);
+    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  // Summary Statistics
+  csvRows.push('Summary Statistics');
+  csvRows.push('Metric,Value');
+  csvRows.push(`Total Queries,${stats.totalQueries}`);
+  csvRows.push(`Blocked Queries,${stats.blockedQueries}`);
+  csvRows.push(`Allowed Queries,${stats.allowedQueries}`);
+  csvRows.push(`Cached Queries,${stats.cachedQueries}`);
+  csvRows.push(`Blocklist Size,${stats.blocklistSize}`);
+  csvRows.push('');
+
+  // Top Domains
+  csvRows.push('Top Domains');
+  csvRows.push('Domain,Count');
+  for (const domain of stats.topDomainsArray) {
+    csvRows.push(`${escapeCSV(domain.domain)},${domain.count}`);
+  }
+  csvRows.push('');
+
+  // Top Blocked Domains
+  csvRows.push('Top Blocked Domains');
+  csvRows.push('Domain,Blocked Count');
+  for (const domain of stats.topBlockedArray) {
+    csvRows.push(`${escapeCSV(domain.domain)},${domain.count}`);
+  }
+  csvRows.push('');
+
+  // Top Clients
+  csvRows.push('Top Clients');
+  csvRows.push('Client IP,Query Count');
+  for (const client of stats.topClientsArray) {
+    csvRows.push(`${escapeCSV(client.clientIp)},${client.count}`);
+  }
+  csvRows.push('');
+
+  // Query Type Breakdown
+  csvRows.push('Query Type Breakdown');
+  csvRows.push('Type,Count');
+  for (const type of stats.queryTypeBreakdown) {
+    csvRows.push(`${escapeCSV(type.type)},${type.count}`);
+  }
+  csvRows.push('');
+
+  // Block Percentage Over Time
+  csvRows.push('Block Percentage Over Time');
+  csvRows.push('Date,Total Queries,Blocked Queries,Block Percentage');
+  for (const day of stats.blockPercentageOverTime) {
+    csvRows.push(`${escapeCSV(day.date)},${day.total},${day.blocked},${day.blockPercentage.toFixed(2)}%`);
+  }
+  csvRows.push('');
+
+  // Top Advertisers
+  csvRows.push('Top Advertisers');
+  csvRows.push('Domain,Blocked Count,Total Count,Block Rate');
+  for (const advertiser of stats.topAdvertisers) {
+    csvRows.push(
+      `${escapeCSV(advertiser.domain)},${advertiser.blockedCount},${advertiser.totalCount},${advertiser.blockRate.toFixed(
+        2,
+      )}%`,
+    );
+  }
+
+  const csv = csvRows.join('\n');
+  const filename = `dns-stats-${new Date().toISOString().split('T')[0]}.csv`;
+
+  return c.text(csv, 200, {
+    'Content-Type': 'text/csv',
+    'Content-Disposition': `attachment; filename="${filename}"`,
+  });
+});
+
+// Export statistics as JSON
+app.get('/api/stats/export/json', requireAuth, (c) => {
+  const stats = dnsServer.getStats();
+  const json = JSON.stringify(stats, null, 2);
+  const filename = `dns-stats-${new Date().toISOString().split('T')[0]}.json`;
+
+  return c.text(json, 200, {
+    'Content-Type': 'application/json',
+    'Content-Disposition': `attachment; filename="${filename}"`,
+  });
+});
+
 // Advanced statistics
 app.get('/api/stats/client/:clientIp', requireAuth, (c) => {
   const clientIp = c.req.param('clientIp');

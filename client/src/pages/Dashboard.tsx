@@ -12,6 +12,8 @@ import { BlockPercentageChart } from "../components/BlockPercentageChart";
 import { TopAdvertisers } from "../components/TopAdvertisers";
 import { Loading } from "../components/Loading";
 import { PageHeader } from "../components/PageHeader";
+import { Button } from "../components/Button";
+import { api } from "../lib/api";
 
 export function Dashboard() {
   const { data: stats, isLoading: statsLoading } = useStats();
@@ -45,7 +47,46 @@ export function Dashboard() {
       <PageHeader
         title="Dashboard"
         description="Ad-blocking DNS with real-time monitoring"
-      />
+      >
+        <div className="flex gap-2">
+          <Button
+            onClick={async () => {
+              try {
+                const blob = await api.exportStatsCSV();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `dns-stats-${new Date().toISOString().split('T')[0]}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+              } catch (error) {
+                alert(error instanceof Error ? error.message : 'Failed to export statistics');
+              }
+            }}
+            variant="outline"
+          >
+            Export CSV
+          </Button>
+          <Button
+            onClick={async () => {
+              try {
+                const blob = await api.exportStatsJSON();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `dns-stats-${new Date().toISOString().split('T')[0]}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+              } catch (error) {
+                alert(error instanceof Error ? error.message : 'Failed to export statistics');
+              }
+            }}
+            variant="outline"
+          >
+            Export JSON
+          </Button>
+        </div>
+      </PageHeader>
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 md:py-8">

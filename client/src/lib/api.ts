@@ -65,6 +65,22 @@ export const api = {
     return response.json();
   },
 
+  async exportStatsCSV(): Promise<Blob> {
+    const response = await fetch(`${API_URL}/api/stats/export/csv`);
+    if (!response.ok) {
+      throw new Error(`Failed to export statistics: ${response.statusText}`);
+    }
+    return response.blob();
+  },
+
+  async exportStatsJSON(): Promise<Blob> {
+    const response = await fetch(`${API_URL}/api/stats/export/json`);
+    if (!response.ok) {
+      throw new Error(`Failed to export statistics: ${response.statusText}`);
+    }
+    return response.blob();
+  },
+
   async getHealth(): Promise<ServerHealth> {
     const response = await fetch(`${API_URL}/api/health`);
     if (!response.ok) {
