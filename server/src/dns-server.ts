@@ -29,6 +29,7 @@ import { logger } from './logger.js';
 import { validateDNSSEC, validateChainOfTrust } from './dnssec-validator.js';
 import { signRRset, generateDNSKEYRecord } from './dnssec-signer.js';
 import { handleDNSUpdate } from './ddns-handler.js';
+import { handleAXFR, handleIXFR } from './zone-transfer-handler.js';
 
 export interface DNSQuery {
   id: string;
@@ -1648,6 +1649,7 @@ export class DNSServer {
 
     const { id, domain, type, wantsDNSSEC } = parsed;
 
+    // Zone transfers (AXFR/IXFR) are handled in TCP socket handler, not here
     // Check rate limiting first
     if (this.rateLimitEnabled && clientIp) {
       const rateLimitResult = dbRateLimits.checkRateLimit(clientIp, this.rateLimitMaxQueries, this.rateLimitWindowMs);
@@ -1826,6 +1828,67 @@ export class DNSServer {
           expectedLength = null;
 
           try {
+            // Check if it's a zone transfer request (AXFR/IXFR)
+            if (dnsMsg.length >= 12) {
+              const flags = dnsMsg.readUInt16BE(2);
+              const isQuery = (flags & 0x8000) === 0;
+              
+              if (isQuery) {
+                // Parse query to get domain and type
+                let offset = 12;
+                const domainParts: string[] = [];
+                while (offset < dnsMsg.length && dnsMsg[offset] !== 0) {
+                  const length = dnsMsg[offset];
+                  if ((length & 0xc0) === 0xc0) {
+                    offset += 2;
+                    break;
+                  }
+                  offset++;
+                  if (offset + length > dnsMsg.length) break;
+                  domainParts.push(dnsMsg.toString('utf8', offset, offset + length));
+                  offset += length;
+                }
+                offset++; // Skip null terminator
+                
+                if (offset + 4 <= dnsMsg.length) {
+                  const queryType = dnsMsg.readUInt16BE(offset);
+                  const domain = domainParts.join('.');
+
+                  // Handle zone transfers (AXFR=252, IXFR=251)
+                  if (queryType === 252 || queryType === 251) {
+                    const zone = dbZones.findZoneForDomain(domain);
+                    if (zone) {
+                      const queryId = dnsMsg.readUInt16BE(0);
+                      let requestedSerial = 0;
+
+                      // For IXFR, try to parse requested serial from authority section
+                      if (queryType === 251) {
+                        // IXFR queries may include SOA in authority section
+                        // For now, use current serial - 1 to trigger full transfer
+                        requestedSerial = zone.soa_serial - 1;
+                      }
+
+                      const transferRecords =
+                        queryType === 252
+                          ? handleAXFR(zone.id, queryId)
+                          : handleIXFR(zone.id, queryId, requestedSerial);
+
+                      // Send each record with TCP length prefix
+                      for (const record of transferRecords) {
+                        const lengthPrefix = Buffer.alloc(2);
+                        lengthPrefix.writeUInt16BE(record.length, 0);
+                        socket.write(Buffer.concat([lengthPrefix, record]));
+                      }
+
+                      socket.end();
+                      return;
+                    }
+                  }
+                }
+              }
+            }
+
+            // Handle normal DNS query
             const response = await this.handleDNSQuery(dnsMsg, clientIp, true);
 
             // Send response with length prefix
