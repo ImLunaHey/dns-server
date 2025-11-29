@@ -1,7 +1,11 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { useEffect } from "react";
-import { useSettings, useUpdateSettings } from "../hooks/useSettings";
+import {
+  useSettings,
+  useUpdateSettings,
+  useClearCache,
+} from "../hooks/useSettings";
 import { cn } from "../lib/cn";
 import { Panel } from "../components/Panel";
 import { PageHeader } from "../components/PageHeader";
@@ -61,7 +65,6 @@ const settingsSchema = z.object({
   rateLimitMaxQueries: z.number().int().min(1),
   rateLimitWindowMs: z.number().int().min(1000),
   cacheEnabled: z.boolean(),
-  cacheTTL: z.number().int().min(60),
   blockPageEnabled: z.boolean(),
   blockPageIP: z.string().nullable(),
   blockPageIPv6: z.string().nullable(),
@@ -77,6 +80,7 @@ export function Settings() {
   "use no memo";
   const { data: settings, isLoading } = useSettings();
   const updateSettings = useUpdateSettings();
+  const clearCache = useClearCache();
   const toast = useToastContext();
 
   const {
@@ -97,7 +101,6 @@ export function Settings() {
       rateLimitMaxQueries: settings?.rateLimitMaxQueries ?? 1000,
       rateLimitWindowMs: settings?.rateLimitWindowMs ?? 60000,
       cacheEnabled: Boolean(settings?.cacheEnabled ?? true),
-      cacheTTL: settings?.cacheTTL ?? 300,
       blockPageEnabled: Boolean(settings?.blockPageEnabled ?? false),
       blockPageIP: settings?.blockPageIP ?? null,
       blockPageIPv6: settings?.blockPageIPv6 ?? null,
@@ -119,7 +122,6 @@ export function Settings() {
         rateLimitMaxQueries: settings.rateLimitMaxQueries ?? 1000,
         rateLimitWindowMs: settings.rateLimitWindowMs ?? 60000,
         cacheEnabled: Boolean(settings.cacheEnabled ?? true),
-        cacheTTL: settings.cacheTTL ?? 300,
         blockPageEnabled: Boolean(settings.blockPageEnabled ?? false),
         blockPageIP: settings.blockPageIP ?? null,
         blockPageIPv6: settings.blockPageIPv6 ?? null,
@@ -467,41 +469,38 @@ export function Settings() {
                 </label>
               </div>
 
-              {cacheEnabled && (
-                <FormField
-                  label="Cache TTL (seconds)"
-                  error={errors.cacheTTL?.message}
-                >
-                  <input
-                    type="number"
-                    {...register("cacheTTL", {
-                      valueAsNumber: true,
-                      validate: (value) => {
-                        const result =
-                          settingsSchema.shape.cacheTTL.safeParse(value);
-                        return (
-                          result.success || result.error.issues[0]?.message
-                        );
-                      },
-                    })}
-                    min="60"
-                    className={cn(
-                      "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
-                      "focus:outline-none focus:ring-2 focus:ring-blue-500",
-                      errors.cacheTTL && "border-red-500"
-                    )}
-                  />
-                  <p className="text-xs text-gray-400 mt-1">
-                    Time to live for cached DNS responses
-                  </p>
-                </FormField>
-              )}
-
               {settings?.cacheSize !== undefined && (
                 <div className="text-sm text-gray-400">
                   Current cache size: {settings.cacheSize} entries
                 </div>
               )}
+
+              <div className="pt-4 border-t border-gray-700">
+                <Button
+                  type="button"
+                  onClick={() => {
+                    clearCache.mutate(undefined, {
+                      onSuccess: () => {
+                        toast.success("Cache cleared successfully");
+                      },
+                      onError: (error) => {
+                        toast.error(
+                          error instanceof Error
+                            ? `Failed to clear cache: ${error.message}`
+                            : "Failed to clear cache"
+                        );
+                      },
+                    });
+                  }}
+                  disabled={clearCache.isPending || !cacheEnabled}
+                  color="orange"
+                >
+                  {clearCache.isPending ? "Clearing..." : "Clear Cache"}
+                </Button>
+                <p className="text-xs text-gray-400 mt-2">
+                  Remove all cached DNS responses from memory
+                </p>
+              </div>
             </div>
           </Panel>
 

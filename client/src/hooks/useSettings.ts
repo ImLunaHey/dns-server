@@ -20,3 +20,14 @@ export function useUpdateSettings() {
   });
 }
 
+export function useClearCache() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => api.clearCache(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+    },
+  });
+}
+

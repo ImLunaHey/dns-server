@@ -86,7 +86,6 @@ export class DNSServer {
     this.rateLimitMaxQueries = parseInt(dbSettings.get('rateLimitMaxQueries', '1000'), 10);
     this.rateLimitWindowMs = parseInt(dbSettings.get('rateLimitWindowMs', '60000'), 10);
     this.cacheEnabled = dbSettings.get('cacheEnabled', 'true') === 'true';
-    this.cacheTTL = parseInt(dbSettings.get('cacheTTL', '300'), 10);
     this.blockPageEnabled = dbSettings.get('blockPageEnabled', 'false') === 'true';
     this.blockPageIP = dbSettings.get('blockPageIP', '0.0.0.0');
 
@@ -184,14 +183,12 @@ export class DNSServer {
     if (!this.cacheEnabled) return;
 
     const key = this.getCacheKey(domain, type);
-    
-    // Extract TTL from DNS response, or fall back to configured cacheTTL
+
+    // Extract TTL from DNS response, or fall back to default (5 minutes)
     const responseTTL = this.extractTTLFromResponse(response);
-    // Use the minimum of response TTL and configured max TTL
-    const ttl = responseTTL !== null 
-      ? Math.min(responseTTL, this.cacheTTL) 
-      : this.cacheTTL;
-    
+    const DEFAULT_TTL = 300; // 5 minutes fallback if TTL extraction fails
+    const ttl = responseTTL !== null ? responseTTL : DEFAULT_TTL;
+
     const expiresAt = Date.now() + ttl * 1000;
 
     this.cache.set(key, {
@@ -219,7 +216,6 @@ export class DNSServer {
     return {
       size: this.cache.size,
       enabled: this.cacheEnabled,
-      ttl: this.cacheTTL,
     };
   }
 
@@ -229,11 +225,6 @@ export class DNSServer {
     if (!enabled) {
       this.cache.clear();
     }
-  }
-
-  setCacheTTL(ttl: number) {
-    this.cacheTTL = ttl;
-    dbSettings.set('cacheTTL', ttl.toString());
   }
 
   getBlockPageIPv6(): string {

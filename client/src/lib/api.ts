@@ -256,7 +256,6 @@ export const api = {
     rateLimitMaxQueries: number;
     rateLimitWindowMs: number;
     cacheEnabled: boolean;
-    cacheTTL: number;
     cacheSize: number;
     blockPageEnabled: boolean;
     blockPageIP: IP | null;
@@ -278,7 +277,6 @@ export const api = {
     rateLimitMaxQueries?: number;
     rateLimitWindowMs?: number;
     cacheEnabled?: boolean;
-    cacheTTL?: number;
     blockPageEnabled?: boolean;
     blockPageIP?: IP;
     blockPageIPv6?: IPv6;
@@ -292,6 +290,15 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
     });
+  },
+
+  async clearCache(): Promise<void> {
+    const response = await fetch(`${API_URL}/api/cache/clear`, {
+      method: "POST",
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to clear cache: ${response.statusText}`);
+    }
   },
 
   async getBlockPageSettings(): Promise<{

@@ -1,7 +1,7 @@
 import { ButtonHTMLAttributes, ReactNode } from "react";
 import { cn } from "../lib/cn";
 
-export type ButtonColor = "blue" | "red" | "green" | "yellow" | "purple" | "gray";
+export type ButtonColor = "blue" | "red" | "green" | "yellow" | "purple" | "gray" | "orange";
 export type ButtonSize = "sm" | "md" | "lg";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -41,6 +41,11 @@ const colorClasses: Record<ButtonColor, { solid: string; outline: string; ghost:
     solid: "bg-gray-600 hover:bg-gray-700 text-white",
     outline: "border border-gray-600 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900/20",
     ghost: "text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900/20",
+  },
+  orange: {
+    solid: "bg-orange-600 hover:bg-orange-700 text-white",
+    outline: "border border-orange-600 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/20",
+    ghost: "text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20",
   },
 };
 

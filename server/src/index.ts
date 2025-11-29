@@ -970,7 +970,6 @@ app.get('/api/settings', requireAuth, (c) => {
     rateLimitMaxQueries: parseInt(dbSettings.get('rateLimitMaxQueries', '1000'), 10),
     rateLimitWindowMs: parseInt(dbSettings.get('rateLimitWindowMs', '60000'), 10),
     cacheEnabled: cacheStats.enabled,
-    cacheTTL: cacheStats.ttl,
     cacheSize: cacheStats.size,
     blockPageEnabled: blockPageStatus.enabled,
     blockPageIP: blockPageStatus.ipv4,
@@ -991,7 +990,6 @@ app.put('/api/settings', requireAuth, async (c) => {
     rateLimitMaxQueries,
     rateLimitWindowMs,
     cacheEnabled,
-    cacheTTL,
     blockPageEnabled,
     blockPageIP,
     blockPageIPv6,
@@ -1030,10 +1028,6 @@ app.put('/api/settings', requireAuth, async (c) => {
 
   if (typeof cacheEnabled === 'boolean') {
     dnsServer.setCacheEnabled(cacheEnabled);
-  }
-
-  if (cacheTTL && typeof cacheTTL === 'number' && cacheTTL > 0) {
-    dnsServer.setCacheTTL(cacheTTL);
   }
 
   if (typeof blockPageEnabled === 'boolean') {
