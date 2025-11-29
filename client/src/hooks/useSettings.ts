@@ -12,7 +12,7 @@ export function useUpdateSettings() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (settings: { upstreamDNS?: string; queryRetentionDays?: number }) =>
+    mutationFn: (settings: Parameters<typeof api.updateSettings>[0]) =>
       api.updateSettings(settings),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });

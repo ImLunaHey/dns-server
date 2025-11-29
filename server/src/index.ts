@@ -805,7 +805,6 @@ app.post('/api/blocking/disable', requireAuth, async (c) => {
 
 // Settings
 app.get('/api/settings', requireAuth, (c) => {
-  const settings = dbSettings.getAll();
   const cacheStats = dnsServer.getCacheStats();
   const blockPageStatus = dnsServer.getBlockPageStatus();
   return c.json({
@@ -822,7 +821,10 @@ app.get('/api/settings', requireAuth, (c) => {
     blockPageEnabled: blockPageStatus.enabled,
     blockPageIP: blockPageStatus.ipv4,
     blockPageIPv6: blockPageStatus.ipv6,
-    ...settings,
+    dotEnabled: dbSettings.get('dotEnabled', 'false') === 'true',
+    dotPort: parseInt(dbSettings.get('dotPort', '853'), 10),
+    dotCertPath: dbSettings.get('dotCertPath', ''),
+    dotKeyPath: dbSettings.get('dotKeyPath', ''),
   });
 });
 
@@ -839,6 +841,10 @@ app.put('/api/settings', requireAuth, async (c) => {
     blockPageEnabled,
     blockPageIP,
     blockPageIPv6,
+    dotEnabled,
+    dotPort,
+    dotCertPath,
+    dotKeyPath,
   } = await c.req.json();
 
   if (upstreamDNS && typeof upstreamDNS === 'string') {
@@ -886,6 +892,61 @@ app.put('/api/settings', requireAuth, async (c) => {
 
   if (blockPageIPv6 && typeof blockPageIPv6 === 'string') {
     dnsServer.setBlockPageIPv6(blockPageIPv6);
+  }
+
+  // Track if DoT settings changed
+  let dotSettingsChanged = false;
+  const previousDotEnabled = dbSettings.get('dotEnabled', 'false') === 'true';
+  const previousDotPort = parseInt(dbSettings.get('dotPort', '853'), 10);
+  const previousDotCertPath = dbSettings.get('dotCertPath', '');
+  const previousDotKeyPath = dbSettings.get('dotKeyPath', '');
+
+  if (typeof dotEnabled === 'boolean') {
+    const newDotEnabled = dotEnabled;
+    if (newDotEnabled !== previousDotEnabled) {
+      dotSettingsChanged = true;
+      console.log(`🔄 DoT enabled changed: ${previousDotEnabled} -> ${newDotEnabled}`);
+    }
+    dbSettings.set('dotEnabled', dotEnabled.toString());
+  }
+
+  if (dotPort && typeof dotPort === 'number' && dotPort > 0) {
+    if (dotPort !== previousDotPort) {
+      dotSettingsChanged = true;
+      console.log(`🔄 DoT port changed: ${previousDotPort} -> ${dotPort}`);
+    }
+    dbSettings.set('dotPort', dotPort.toString());
+  }
+
+  if (dotCertPath && typeof dotCertPath === 'string') {
+    if (dotCertPath !== previousDotCertPath) {
+      dotSettingsChanged = true;
+      console.log(`🔄 DoT cert path changed: ${previousDotCertPath} -> ${dotCertPath}`);
+    }
+    dbSettings.set('dotCertPath', dotCertPath);
+  }
+
+  if (dotKeyPath && typeof dotKeyPath === 'string') {
+    if (dotKeyPath !== previousDotKeyPath) {
+      dotSettingsChanged = true;
+      console.log(`🔄 DoT key path changed: ${previousDotKeyPath} -> ${dotKeyPath}`);
+    }
+    dbSettings.set('dotKeyPath', dotKeyPath);
+  }
+
+  // Restart DoT server if settings changed
+  if (dotSettingsChanged) {
+    console.log('🔄 Restarting DoT server due to settings change...');
+    try {
+      await dnsServer.restartDoT();
+      console.log('✅ DoT server restarted with new settings');
+    } catch (error) {
+      console.error('❌ Failed to restart DoT server:', error);
+      // Don't fail the request, just log the error
+    }
+  } else if (typeof dotEnabled === 'boolean' || dotPort || dotCertPath || dotKeyPath) {
+    // Even if no change detected, if DoT settings were provided, verify they're correct
+    console.log('ℹ️  DoT settings updated but no change detected (may already be configured)');
   }
 
   return c.json({ success: true, settings: dbSettings.getAll() });

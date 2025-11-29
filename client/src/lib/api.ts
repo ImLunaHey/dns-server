@@ -235,6 +235,10 @@ export const api = {
     blockPageEnabled: boolean;
     blockPageIP: IP | null;
     blockPageIPv6: IPv6 | null;
+    dotEnabled?: boolean;
+    dotPort?: number;
+    dotCertPath?: string;
+    dotKeyPath?: string;
   }> {
     const response = await fetch(`${API_URL}/api/settings`);
     return response.json();
@@ -252,6 +256,10 @@ export const api = {
     blockPageEnabled?: boolean;
     blockPageIP?: IP;
     blockPageIPv6?: IPv6;
+    dotEnabled?: boolean;
+    dotPort?: number;
+    dotCertPath?: string;
+    dotKeyPath?: string;
   }): Promise<void> {
     await fetch(`${API_URL}/api/settings`, {
       method: "PUT",

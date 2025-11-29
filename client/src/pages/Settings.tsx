@@ -1,5 +1,6 @@
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { useEffect } from "react";
 import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { cn } from "../lib/cn";
 import { Panel } from "../components/Panel";
@@ -7,6 +8,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Button } from "../components/Button";
 import { FormField } from "../components/FormField";
 import { Loading } from "../components/Loading";
+import { useToastContext } from "../contexts/ToastContext";
 
 const KNOWN_DNS_PROVIDERS = [
   {
@@ -63,6 +65,10 @@ const settingsSchema = z.object({
   blockPageEnabled: z.boolean(),
   blockPageIP: z.string().nullable(),
   blockPageIPv6: z.string().nullable(),
+  dotEnabled: z.boolean().optional(),
+  dotPort: z.number().int().min(1).max(65535).optional(),
+  dotCertPath: z.string().optional(),
+  dotKeyPath: z.string().optional(),
 });
 
 type SettingsFormData = z.infer<typeof settingsSchema>;
@@ -71,46 +77,107 @@ export function Settings() {
   "use no memo";
   const { data: settings, isLoading } = useSettings();
   const updateSettings = useUpdateSettings();
+  const toast = useToastContext();
 
   const {
     register,
     handleSubmit,
     watch,
     setValue,
-    formState: { errors },
-    setError,
+    reset,
+    trigger,
+    formState: { errors, isValid, isDirty },
   } = useForm<SettingsFormData>({
+    mode: "onChange", // Validate on change to show errors immediately
     defaultValues: {
       upstreamDNS: settings?.upstreamDNS || "1.1.1.1",
       queryRetentionDays: settings?.queryRetentionDays ?? 7,
-      privacyMode: settings?.privacyMode ?? false,
-      rateLimitEnabled: settings?.rateLimitEnabled ?? false,
+      privacyMode: Boolean(settings?.privacyMode ?? false),
+      rateLimitEnabled: Boolean(settings?.rateLimitEnabled ?? false),
       rateLimitMaxQueries: settings?.rateLimitMaxQueries ?? 1000,
       rateLimitWindowMs: settings?.rateLimitWindowMs ?? 60000,
-      cacheEnabled: settings?.cacheEnabled ?? true,
+      cacheEnabled: Boolean(settings?.cacheEnabled ?? true),
       cacheTTL: settings?.cacheTTL ?? 300,
-      blockPageEnabled: settings?.blockPageEnabled ?? false,
+      blockPageEnabled: Boolean(settings?.blockPageEnabled ?? false),
       blockPageIP: settings?.blockPageIP ?? null,
       blockPageIPv6: settings?.blockPageIPv6 ?? null,
+      dotEnabled: Boolean(settings?.dotEnabled ?? false),
+      dotPort: settings?.dotPort ?? 853,
+      dotCertPath: settings?.dotCertPath ?? "",
+      dotKeyPath: settings?.dotKeyPath ?? "",
     },
   });
+
+  // Reset form when settings are loaded or updated
+  useEffect(() => {
+    if (settings) {
+      reset({
+        upstreamDNS: settings.upstreamDNS || "1.1.1.1",
+        queryRetentionDays: settings.queryRetentionDays ?? 7,
+        privacyMode: Boolean(settings.privacyMode ?? false),
+        rateLimitEnabled: Boolean(settings.rateLimitEnabled ?? false),
+        rateLimitMaxQueries: settings.rateLimitMaxQueries ?? 1000,
+        rateLimitWindowMs: settings.rateLimitWindowMs ?? 60000,
+        cacheEnabled: Boolean(settings.cacheEnabled ?? true),
+        cacheTTL: settings.cacheTTL ?? 300,
+        blockPageEnabled: Boolean(settings.blockPageEnabled ?? false),
+        blockPageIP: settings.blockPageIP ?? null,
+        blockPageIPv6: settings.blockPageIPv6 ?? null,
+        dotEnabled: Boolean(settings.dotEnabled ?? false),
+        dotPort: settings.dotPort ?? 853,
+        dotCertPath: settings.dotCertPath ?? "",
+        dotKeyPath: settings.dotKeyPath ?? "",
+      });
+    }
+  }, [settings, reset]);
 
   const rateLimitEnabled = watch("rateLimitEnabled");
   const cacheEnabled = watch("cacheEnabled");
   const blockPageEnabled = watch("blockPageEnabled");
   const upstreamDNS = watch("upstreamDNS");
   const rateLimitWindowMs = watch("rateLimitWindowMs");
+  const dotEnabled = watch("dotEnabled");
+
+  // Re-validate DoT fields when dotEnabled changes
+  useEffect(() => {
+    if (dotEnabled !== undefined) {
+      trigger(["dotCertPath", "dotKeyPath"]);
+    }
+  }, [dotEnabled, trigger]);
 
   const onSubmit = async (data: SettingsFormData) => {
+    // Validate with zod schema
     const result = settingsSchema.safeParse(data);
     if (!result.success) {
-      result.error.issues.forEach((issue) => {
-        const path = issue.path.join(".") as keyof SettingsFormData;
-        setError(path, { message: issue.message });
-      });
+      const errorMessages = result.error.issues
+        .slice(0, 3)
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`);
+      toast.error(
+        `Please fix ${result.error.issues.length} error${
+          result.error.issues.length > 1 ? "s" : ""
+        }: ${errorMessages.join(", ")}${
+          result.error.issues.length > 3 ? "..." : ""
+        }`
+      );
       return;
     }
-    await updateSettings.mutateAsync(result.data);
+
+    try {
+      // Convert null to undefined for API compatibility
+      const settingsToSave = {
+        ...result.data,
+        blockPageIP: result.data.blockPageIP ?? undefined,
+        blockPageIPv6: result.data.blockPageIPv6 ?? undefined,
+      };
+      await updateSettings.mutateAsync(settingsToSave);
+      toast.success("Settings saved successfully");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? `Failed to save settings: ${error.message}`
+          : "Failed to save settings"
+      );
+    }
   };
 
   if (isLoading || !settings) {
@@ -198,32 +265,34 @@ export function Settings() {
                   <label className="block text-xs font-medium text-gray-400 mb-2">
                     Custom DNS Server
                   </label>
-                  <input
-                    type="text"
-                    {...register("upstreamDNS", {
-                      validate: (value) => {
-                        const result =
-                          settingsSchema.shape.upstreamDNS.safeParse(value);
-                        return (
-                          result.success || result.error.issues[0]?.message
-                        );
-                      },
-                    })}
-                    placeholder="1.1.1.1 or custom IP"
-                    className={cn(
-                      "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
-                      "focus:outline-none focus:ring-2 focus:ring-blue-500",
-                      errors.upstreamDNS && "border-red-500"
-                    )}
-                  />
-                  <p className="text-xs text-gray-400 mt-1">
-                    IP address of the upstream DNS server to forward queries to
-                  </p>
-                  {errors.upstreamDNS && (
-                    <p className="text-red-400 text-sm mt-1">
-                      {errors.upstreamDNS.message}
+                  <FormField label="" error={errors.upstreamDNS?.message}>
+                    <input
+                      type="text"
+                      {...register("upstreamDNS", {
+                        required: "Upstream DNS is required",
+                        validate: (value) => {
+                          if (!value || value.trim() === "") {
+                            return "Upstream DNS is required";
+                          }
+                          const result =
+                            settingsSchema.shape.upstreamDNS.safeParse(value);
+                          return (
+                            result.success || result.error.issues[0]?.message
+                          );
+                        },
+                      })}
+                      placeholder="1.1.1.1 or custom IP"
+                      className={cn(
+                        "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
+                        "focus:outline-none focus:ring-2 focus:ring-blue-500",
+                        errors.upstreamDNS && "border-red-500"
+                      )}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      IP address of the upstream DNS server to forward queries
+                      to
                     </p>
-                  )}
+                  </FormField>
                 </div>
               </div>
 
@@ -265,7 +334,10 @@ export function Settings() {
               <label className="relative inline-flex items-center cursor-pointer">
                 <input
                   type="checkbox"
-                  {...register("privacyMode")}
+                  {...register("privacyMode", {
+                    onChange: (e) =>
+                      setValue("privacyMode", Boolean(e.target.checked)),
+                  })}
                   className="sr-only peer"
                 />
                 <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
@@ -292,7 +364,10 @@ export function Settings() {
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input
                     type="checkbox"
-                    {...register("rateLimitEnabled")}
+                    {...register("rateLimitEnabled", {
+                      onChange: (e) =>
+                        setValue("rateLimitEnabled", Boolean(e.target.checked)),
+                    })}
                     className="sr-only peer"
                   />
                   <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
@@ -382,7 +457,10 @@ export function Settings() {
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input
                     type="checkbox"
-                    {...register("cacheEnabled")}
+                    {...register("cacheEnabled", {
+                      onChange: (e) =>
+                        setValue("cacheEnabled", Boolean(e.target.checked)),
+                    })}
                     className="sr-only peer"
                   />
                   <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
@@ -446,7 +524,10 @@ export function Settings() {
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input
                     type="checkbox"
-                    {...register("blockPageEnabled")}
+                    {...register("blockPageEnabled", {
+                      onChange: (e) =>
+                        setValue("blockPageEnabled", Boolean(e.target.checked)),
+                    })}
                     className="sr-only peer"
                   />
                   <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
@@ -503,6 +584,174 @@ export function Settings() {
             </div>
           </Panel>
 
+          {/* DNS-over-TLS (DoT) Settings */}
+          <Panel>
+            <h2 className="text-xl font-semibold text-white mb-6">
+              DNS-over-TLS (DoT) Settings
+            </h2>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Enable DNS-over-TLS
+                  </label>
+                  <p className="text-xs text-gray-400">
+                    Enable encrypted DNS over TLS on port 853
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    {...register("dotEnabled", {
+                      onChange: (e) =>
+                        setValue("dotEnabled", Boolean(e.target.checked)),
+                    })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+
+              {dotEnabled && (
+                <>
+                  <FormField label="DoT Port" error={errors.dotPort?.message}>
+                    <input
+                      type="number"
+                      {...register("dotPort", {
+                        valueAsNumber: true,
+                      })}
+                      min="1"
+                      max="65535"
+                      className={cn(
+                        "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
+                        "focus:outline-none focus:ring-2 focus:ring-blue-500",
+                        errors.dotPort && "border-red-500"
+                      )}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      Port for DNS-over-TLS (default: 853)
+                    </p>
+                  </FormField>
+
+                  <FormField
+                    label="Certificate Path"
+                    error={errors.dotCertPath?.message}
+                  >
+                    <input
+                      type="text"
+                      {...register("dotCertPath", {
+                        validate: (value) => {
+                          if (dotEnabled && (!value || !value.trim())) {
+                            return "Certificate path is required when DoT is enabled";
+                          }
+                          return true;
+                        },
+                      })}
+                      placeholder="server/certs/dot.crt"
+                      className={cn(
+                        "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
+                        "focus:outline-none focus:ring-2 focus:ring-blue-500",
+                        errors.dotCertPath && "border-red-500"
+                      )}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      Path to TLS certificate file (relative to project root or
+                      absolute)
+                    </p>
+                  </FormField>
+
+                  <FormField
+                    label="Private Key Path"
+                    error={errors.dotKeyPath?.message}
+                  >
+                    <input
+                      type="text"
+                      {...register("dotKeyPath", {
+                        validate: (value) => {
+                          if (dotEnabled && (!value || !value.trim())) {
+                            return "Private key path is required when DoT is enabled";
+                          }
+                          return true;
+                        },
+                      })}
+                      placeholder="server/certs/dot.key"
+                      className={cn(
+                        "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
+                        "focus:outline-none focus:ring-2 focus:ring-blue-500",
+                        errors.dotKeyPath && "border-red-500"
+                      )}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      Path to TLS private key file (relative to project root or
+                      absolute)
+                    </p>
+                  </FormField>
+
+                  <div className="bg-blue-900/20 border border-blue-700 rounded-lg p-3">
+                    <p className="text-xs text-blue-300">
+                      <strong>Note:</strong> You need to generate TLS
+                      certificates first. Run{" "}
+                      <code className="bg-blue-900/50 px-1 rounded">
+                        node generate-dot-certs.js
+                      </code>{" "}
+                      to create self-signed certificates for testing.
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          </Panel>
+
+          {/* DNS-over-HTTPS (DoH) Settings */}
+          <Panel>
+            <h2 className="text-xl font-semibold text-white mb-6">
+              DNS-over-HTTPS (DoH) Settings
+            </h2>
+
+            <div className="space-y-4">
+              <div className="bg-gray-700/50 border border-gray-600 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-white">
+                    DoH Status
+                  </span>
+                  <span className="text-xs px-2 py-1 bg-green-600 text-white rounded">
+                    Enabled
+                  </span>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">
+                  DNS-over-HTTPS is always enabled and available at:
+                </p>
+                <div className="mt-2 space-y-1">
+                  <code className="block text-xs bg-gray-800 px-2 py-1 rounded text-gray-300">
+                    http://localhost:3001/dns-query
+                  </code>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Supports both binary (RFC 8484) and JSON (Cloudflare-style)
+                    formats
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-xs text-gray-400">
+                <p className="mb-2">
+                  <strong>Binary format:</strong> Use{" "}
+                  <code className="bg-gray-800 px-1 rounded">
+                    application/dns-message
+                  </code>{" "}
+                  content type
+                </p>
+                <p>
+                  <strong>JSON format:</strong> Use{" "}
+                  <code className="bg-gray-800 px-1 rounded">
+                    application/dns-json
+                  </code>{" "}
+                  content type
+                </p>
+              </div>
+            </div>
+          </Panel>
+
           {/* Data Settings */}
           <Panel>
             <h2 className="text-xl font-semibold text-white mb-6">
@@ -539,10 +788,18 @@ export function Settings() {
 
           {/* Save Button */}
           <div className="flex justify-end">
-            <Button type="submit" disabled={updateSettings.isPending}>
+            <Button
+              type="submit"
+              disabled={updateSettings.isPending || (!isValid && isDirty)}
+            >
               {updateSettings.isPending ? "Saving..." : "Save Settings"}
             </Button>
           </div>
+          {!isValid && isDirty && (
+            <div className="text-sm text-red-500 text-right">
+              Please fix the errors above before saving
+            </div>
+          )}
         </form>
       </main>
     </>

@@ -15,6 +15,13 @@ build/
 *.db-shm
 *.db-wal
 
+# TLS Certificates (DoT)
+server/certs/
+*.crt
+*.key
+*.pem
+*.csr
+
 # Misc
 .DS_Store
 .env.local

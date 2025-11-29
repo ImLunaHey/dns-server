@@ -1,5 +1,8 @@
 import dgram from 'dgram';
 import net from 'net';
+import tls from 'tls';
+import { join, resolve, dirname, basename } from 'path';
+import { fileURLToPath } from 'url';
 import {
   dbQueries,
   dbLocalDNS,
@@ -49,12 +52,14 @@ interface CachedDNSResponse {
 export class DNSServer {
   private server: dgram.Socket;
   private tcpServer: net.Server;
+  private dotServer: tls.Server | null = null;
   private blocklist: Set<string> = new Set();
   private blocklistUrls: string[] = [];
   private blockingEnabled: boolean = true;
   private blockingDisabledUntil: number | null = null;
   private upstreamDNS: string;
   private port: number;
+  private dotPort: number;
   private rateLimitEnabled: boolean = false;
   private rateLimitMaxQueries: number = 1000;
   private rateLimitWindowMs: number = 60000; // 1 minute
@@ -67,6 +72,7 @@ export class DNSServer {
   constructor() {
     this.server = dgram.createSocket('udp4');
     this.tcpServer = net.createServer();
+    this.dotPort = parseInt(dbSettings.get('dotPort', '853'), 10);
     this.upstreamDNS = dbSettings.get('upstreamDNS', '1.1.1.1');
     this.port = parseInt(dbSettings.get('dnsPort', '53'), 10);
     this.rateLimitEnabled = dbSettings.get('rateLimitEnabled', 'false') === 'true';
@@ -851,96 +857,270 @@ export class DNSServer {
     return response;
   }
 
-  async start() {
-    // UDP DNS Server
-    this.server.on('message', async (msg, rinfo) => {
-      try {
-        const response = await this.handleDNSQuery(msg, rinfo.address, false);
-        this.server.send(response, rinfo.port, rinfo.address);
-      } catch (error) {
-        console.error(`Error handling UDP query:`, error);
-        const errorResponse = this.createDNSResponse(msg, true);
-        this.server.send(errorResponse, rinfo.port, rinfo.address);
+  private setupTCPSocket(socket: net.Socket | tls.TLSSocket) {
+    const clientIp = socket.remoteAddress || 'unknown';
+    let buffer = Buffer.alloc(0);
+    let expectedLength: number | null = null;
+
+    socket.on('data', async (data: Buffer) => {
+      buffer = Buffer.concat([buffer, data]);
+
+      // TCP DNS messages have a 2-byte length prefix
+      while (buffer.length >= 2) {
+        if (expectedLength === null) {
+          expectedLength = buffer.readUInt16BE(0);
+        }
+
+        // Check if we have the complete message (length prefix + message)
+        if (buffer.length >= expectedLength + 2) {
+          // Extract the DNS message (skip the 2-byte length prefix)
+          const dnsMsg = buffer.slice(2, expectedLength + 2);
+          // Remove processed data from buffer
+          buffer = buffer.slice(expectedLength + 2);
+          expectedLength = null;
+
+          try {
+            const response = await this.handleDNSQuery(dnsMsg, clientIp, true);
+
+            // Send response with length prefix
+            const responseLength = Buffer.allocUnsafe(2);
+            responseLength.writeUInt16BE(response.length, 0);
+            socket.write(Buffer.concat([responseLength, response]));
+          } catch (error) {
+            console.error(`Error handling DNS query:`, error);
+            const errorResponse = this.createDNSResponse(dnsMsg, true);
+            const errorLength = Buffer.allocUnsafe(2);
+            errorLength.writeUInt16BE(errorResponse.length, 0);
+            socket.write(Buffer.concat([errorLength, errorResponse]));
+          }
+        } else {
+          // Wait for more data
+          break;
+        }
       }
     });
 
-    this.server.on('error', (err) => {
-      console.error('UDP DNS server error:', err);
+    socket.on('error', (err) => {
+      console.error('Connection error:', err);
     });
 
-    // TCP DNS Server
-    this.tcpServer.on('connection', (socket) => {
-      const clientIp = socket.remoteAddress || 'unknown';
-      let buffer = Buffer.alloc(0);
-      let expectedLength: number | null = null;
+    socket.on('close', () => {
+      // Connection closed
+    });
+  }
 
-      socket.on('data', async (data: Buffer) => {
-        buffer = Buffer.concat([buffer, data]);
-
-        // TCP DNS messages have a 2-byte length prefix
-        while (buffer.length >= 2) {
-          if (expectedLength === null) {
-            expectedLength = buffer.readUInt16BE(0);
-          }
-
-          // Check if we have the complete message (length prefix + message)
-          if (buffer.length >= expectedLength + 2) {
-            // Extract the DNS message (skip the 2-byte length prefix)
-            const dnsMsg = buffer.slice(2, expectedLength + 2);
-            // Remove processed data from buffer
-            buffer = buffer.slice(expectedLength + 2);
-            expectedLength = null;
-
-            try {
-              const response = await this.handleDNSQuery(dnsMsg, clientIp, true);
-
-              // Send response with length prefix
-              const responseLength = Buffer.allocUnsafe(2);
-              responseLength.writeUInt16BE(response.length, 0);
-              socket.write(Buffer.concat([responseLength, response]));
-            } catch (error) {
-              console.error(`Error handling TCP query:`, error);
-              const errorResponse = this.createDNSResponse(dnsMsg, true);
-              const errorLength = Buffer.allocUnsafe(2);
-              errorLength.writeUInt16BE(errorResponse.length, 0);
-              socket.write(Buffer.concat([errorLength, errorResponse]));
-            }
-          } else {
-            // Wait for more data
-            break;
-          }
+  private async startUDP(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this.server.on('message', async (msg, rinfo) => {
+        try {
+          const response = await this.handleDNSQuery(msg, rinfo.address, false);
+          this.server.send(response, rinfo.port, rinfo.address);
+        } catch (error) {
+          console.error(`Error handling UDP query:`, error);
+          const errorResponse = this.createDNSResponse(msg, true);
+          this.server.send(errorResponse, rinfo.port, rinfo.address);
         }
       });
 
-      socket.on('error', (err) => {
-        console.error('TCP connection error:', err);
+      this.server.on('error', (err) => {
+        console.error('UDP DNS server error:', err);
+        reject(err);
       });
 
-      socket.on('close', () => {
-        // Connection closed
-      });
-    });
-
-    this.tcpServer.on('error', (err) => {
-      console.error('TCP DNS server error:', err);
-    });
-
-    return new Promise<void>((resolve) => {
-      // Start UDP server
       this.server.bind(this.port, () => {
         console.log(`🚀 DNS server (UDP) running on port ${this.port}`);
+        resolve();
+      });
+    });
+  }
 
-        // Start TCP server on the same port
-        this.tcpServer.listen(this.port, () => {
-          console.log(`🚀 DNS server (TCP) running on port ${this.port}`);
+  private async startTCP(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this.tcpServer.on('connection', (socket) => {
+        this.setupTCPSocket(socket);
+      });
+
+      this.tcpServer.on('error', (err) => {
+        console.error('TCP DNS server error:', err);
+        reject(err);
+      });
+
+      this.tcpServer.listen(this.port, () => {
+        console.log(`🚀 DNS server (TCP) running on port ${this.port}`);
+        resolve();
+      });
+    });
+  }
+
+  private async startDoT(): Promise<void> {
+    const dotEnabled = dbSettings.get('dotEnabled', 'false') === 'true';
+    if (!dotEnabled) {
+      return Promise.resolve();
+    }
+
+    try {
+      let certPath = dbSettings.get('dotCertPath', '').trim();
+      let keyPath = dbSettings.get('dotKeyPath', '').trim();
+
+      if (!certPath || !keyPath) {
+        console.warn('⚠️  DoT server disabled: TLS certificates not configured');
+        console.warn('   Set dotCertPath and dotKeyPath in settings to enable');
+        return Promise.resolve();
+      }
+
+      // Normalize paths (remove ./ prefix if present)
+      if (certPath.startsWith('./')) {
+        certPath = certPath.substring(2);
+      }
+      if (keyPath.startsWith('./')) {
+        keyPath = keyPath.substring(2);
+      }
+
+      const fs = await import('fs');
+      const { existsSync } = fs;
+
+      // Find project root by walking up from current directory
+      // Look for a directory that contains both server/ and client/ directories
+      let projectRoot = process.cwd();
+      let currentDir = projectRoot;
+      let found = false;
+
+      // Walk up to find project root (contains server/ and client/ directories)
+      for (let i = 0; i < 5; i++) {
+        const serverDir = resolve(currentDir, 'server');
+        const clientDir = resolve(currentDir, 'client');
+        if (existsSync(serverDir) && existsSync(clientDir)) {
+          projectRoot = currentDir;
+          found = true;
+          break;
+        }
+        const parent = resolve(currentDir, '..');
+        if (parent === currentDir) break; // Reached filesystem root
+        currentDir = parent;
+      }
+
+      // If not found, check if current directory is 'server', then go up one level
+      if (!found) {
+        const currentBasename = basename(projectRoot);
+        if (currentBasename === 'server') {
+          projectRoot = resolve(projectRoot, '..');
+          found = true;
+        }
+      }
+
+      console.log(`📁 Detected project root: ${projectRoot}`);
+      console.log(`📁 Current working directory: ${process.cwd()}`);
+
+      // Resolve paths relative to project root
+      // If path is already absolute, resolve() will return it as-is
+      if (!certPath.startsWith('/')) {
+        certPath = resolve(projectRoot, certPath);
+      }
+      if (!keyPath.startsWith('/')) {
+        keyPath = resolve(projectRoot, keyPath);
+      }
+
+      // Check if files exist before trying to read them
+      if (!existsSync(certPath)) {
+        console.error(`❌ Certificate file not found: ${certPath}`);
+        console.error(`   Original path: ${dbSettings.get('dotCertPath', '')}`);
+        console.error(`   Project root: ${projectRoot}`);
+        throw new Error(`Certificate file not found: ${certPath}`);
+      }
+      if (!existsSync(keyPath)) {
+        console.error(`❌ Private key file not found: ${keyPath}`);
+        console.error(`   Original path: ${dbSettings.get('dotKeyPath', '')}`);
+        console.error(`   Project root: ${projectRoot}`);
+        throw new Error(`Private key file not found: ${keyPath}`);
+      }
+
+      console.log(`📁 Using certificate: ${certPath}`);
+      console.log(`📁 Using private key: ${keyPath}`);
+
+      const tlsOptions = {
+        cert: fs.readFileSync(certPath),
+        key: fs.readFileSync(keyPath),
+        rejectUnauthorized: false, // Allow self-signed certs for now
+      };
+
+      return new Promise<void>((resolve, reject) => {
+        this.dotServer = tls.createServer(tlsOptions, (socket) => {
+          this.setupTCPSocket(socket);
+        });
+
+        this.dotServer.on('error', (err) => {
+          console.error('DoT server error:', err);
+          reject(err);
+        });
+
+        this.dotServer.listen(this.dotPort, () => {
+          console.log(`🔒 DNS server (DoT) running on port ${this.dotPort}`);
           resolve();
         });
       });
-    });
+    } catch (error) {
+      console.warn('⚠️  DoT server disabled:', error instanceof Error ? error.message : 'Unknown error');
+      console.warn('   Set dotEnabled=true, dotCertPath, and dotKeyPath in settings to enable');
+      return Promise.resolve();
+    }
+  }
+
+  async start() {
+    // Start all servers independently
+    const servers: Promise<void>[] = [];
+
+    // Always start UDP (core DNS functionality)
+    servers.push(this.startUDP());
+
+    // Always start TCP (standard DNS over TCP)
+    servers.push(this.startTCP());
+
+    // Start DoT if enabled (optional)
+    servers.push(this.startDoT());
+
+    // Wait for all servers to start (or fail gracefully)
+    await Promise.allSettled(servers);
   }
 
   stop() {
     this.server.close();
     this.tcpServer.close();
+    if (this.dotServer) {
+      this.dotServer.close();
+    }
+  }
+
+  async stopDoT(): Promise<void> {
+    if (this.dotServer) {
+      return new Promise<void>((resolve) => {
+        this.dotServer!.close(() => {
+          console.log('🔒 DNS server (DoT) stopped');
+          this.dotServer = null;
+          resolve();
+        });
+      });
+    }
+    return Promise.resolve();
+  }
+
+  async restartDoT(): Promise<void> {
+    console.log('🔄 Restarting DoT server...');
+
+    // Stop existing DoT server if running
+    await this.stopDoT();
+
+    // Update dotPort from settings
+    this.dotPort = parseInt(dbSettings.get('dotPort', '853'), 10);
+    console.log(`📝 DoT port set to: ${this.dotPort}`);
+
+    // Start DoT server if enabled
+    const dotEnabled = dbSettings.get('dotEnabled', 'false') === 'true';
+    console.log(`📝 DoT enabled: ${dotEnabled}`);
+
+    if (dotEnabled) {
+      await this.startDoT();
+    } else {
+      console.log('ℹ️  DoT is disabled, not starting server');
+    }
   }
 }

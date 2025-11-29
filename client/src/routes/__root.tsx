@@ -10,6 +10,7 @@ import { NavigationSidebar } from "../components/NavigationSidebar";
 import { useSession } from "../lib/auth";
 import { Loading } from "../components/Loading";
 import { ErrorPage } from "../components/ErrorPage";
+import { ToastProvider } from "../contexts/ToastContext";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -49,7 +50,9 @@ function RootComponent() {
   if (isPending) {
     return (
       <QueryClientProvider client={queryClient}>
-        <Loading fullScreen />
+        <ToastProvider>
+          <Loading fullScreen />
+        </ToastProvider>
       </QueryClientProvider>
     );
   }
@@ -58,8 +61,10 @@ function RootComponent() {
   if (isLoginPage || isSetupPage) {
     return (
       <QueryClientProvider client={queryClient}>
-        <Outlet />
-        <ReactQueryDevtools initialIsOpen={false} />
+        <ToastProvider>
+          <Outlet />
+          <ReactQueryDevtools initialIsOpen={false} />
+        </ToastProvider>
       </QueryClientProvider>
     );
   }
@@ -67,17 +72,19 @@ function RootComponent() {
   // Show sidebar only if authenticated
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="min-h-screen bg-gray-50 dark:bg-black flex flex-col md:flex-row">
-        {isAuthenticated && <NavigationSidebar />}
-        <div
-          className={`flex-1 w-full ${
-            isAuthenticated ? "md:ml-64" : ""
-          } min-w-0`}
-        >
-          <Outlet />
+      <ToastProvider>
+        <div className="min-h-screen bg-gray-50 dark:bg-black flex flex-col md:flex-row">
+          {isAuthenticated && <NavigationSidebar />}
+          <div
+            className={`flex-1 w-full ${
+              isAuthenticated ? "md:ml-64" : ""
+            } min-w-0`}
+          >
+            <Outlet />
+          </div>
         </div>
-      </div>
-      <ReactQueryDevtools initialIsOpen={false} />
+        <ReactQueryDevtools initialIsOpen={false} />
+      </ToastProvider>
     </QueryClientProvider>
   );
 }
