@@ -20,6 +20,7 @@ import {
   dbConditionalForwarding,
   dbClientUpstreamDNS,
   dbRateLimits,
+  dbCache,
 } from './db.js';
 
 export interface DNSQuery {
@@ -98,6 +99,11 @@ export class DNSServer {
     setInterval(() => {
       this.cleanupCache();
     }, 60000); // Every minute
+
+    // Load cache from database on startup
+    if (this.cacheEnabled) {
+      this.loadCacheFromDB();
+    }
   }
 
   private getCacheKey(domain: string, type: number): string {
@@ -108,16 +114,35 @@ export class DNSServer {
     if (!this.cacheEnabled) return null;
 
     const key = this.getCacheKey(domain, type);
+
+    // First check in-memory cache
     const cached = this.cache.get(key);
-
-    if (!cached) return null;
-
-    if (Date.now() > cached.expiresAt) {
-      this.cache.delete(key);
-      return null;
+    if (cached) {
+      if (Date.now() > cached.expiresAt) {
+        this.cache.delete(key);
+        dbCache.delete(domain, type);
+        return null;
+      }
+      return cached.response;
     }
 
-    return cached.response;
+    // If not in memory, check database
+    const dbResponse = dbCache.get(domain, type);
+    if (dbResponse) {
+      // Load into memory cache for faster access
+      const dbCached = dbCache.getAll().find((c) => c.domain === domain.toLowerCase() && c.type === type);
+      if (dbCached) {
+        this.cache.set(key, {
+          response: dbResponse,
+          expiresAt: dbCached.expiresAt,
+          domain: domain.toLowerCase(),
+          type,
+        });
+      }
+      return dbResponse;
+    }
+
+    return null;
   }
 
   /**
@@ -191,12 +216,16 @@ export class DNSServer {
 
     const expiresAt = Date.now() + ttl * 1000;
 
+    // Store in memory cache
     this.cache.set(key, {
       response,
       expiresAt,
       domain: domain.toLowerCase(),
       type,
     });
+
+    // Persist to database
+    dbCache.set(domain.toLowerCase(), type, response, expiresAt);
   }
 
   private cleanupCache() {
@@ -204,12 +233,54 @@ export class DNSServer {
     for (const [key, cached] of this.cache.entries()) {
       if (now > cached.expiresAt) {
         this.cache.delete(key);
+        dbCache.delete(cached.domain, cached.type);
       }
     }
+
+    // Also cleanup expired entries from database
+    dbCache.cleanupExpired();
   }
 
   clearCache() {
     this.cache.clear();
+    dbCache.clear();
+  }
+
+  /**
+   * Load cache entries from database on startup.
+   * Only loads entries that haven't expired.
+   */
+  private loadCacheFromDB() {
+    try {
+      const cachedEntries = dbCache.getAll();
+      const now = Date.now();
+      let loaded = 0;
+      let expired = 0;
+
+      for (const entry of cachedEntries) {
+        if (now > entry.expiresAt) {
+          // Entry expired, delete it
+          dbCache.delete(entry.domain, entry.type);
+          expired++;
+        } else {
+          // Entry still valid, load into memory
+          const key = this.getCacheKey(entry.domain, entry.type);
+          this.cache.set(key, {
+            response: entry.response,
+            expiresAt: entry.expiresAt,
+            domain: entry.domain,
+            type: entry.type,
+          });
+          loaded++;
+        }
+      }
+
+      if (loaded > 0 || expired > 0) {
+        console.log(`📦 Loaded ${loaded} cache entries from database, removed ${expired} expired entries`);
+      }
+    } catch (error) {
+      console.error('Error loading cache from database:', error);
+    }
   }
 
   getCacheStats() {

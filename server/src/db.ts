@@ -191,10 +191,19 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_rate_limits_window ON rate_limits(windowStart);
   CREATE INDEX IF NOT EXISTS idx_conditional_forwarding_domain ON conditional_forwarding(domain);
   
+  CREATE TABLE IF NOT EXISTS dns_cache (
+    domain TEXT NOT NULL,
+    type INTEGER NOT NULL,
+    response BLOB NOT NULL,
+    expiresAt INTEGER NOT NULL,
+    PRIMARY KEY (domain, type)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_timestamp ON queries(timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_domain ON queries(domain);
   CREATE INDEX IF NOT EXISTS idx_clientIp ON queries(clientIp);
   CREATE INDEX IF NOT EXISTS idx_blocked ON queries(blocked);
+  CREATE INDEX IF NOT EXISTS idx_cache_expires ON dns_cache(expiresAt);
 
   -- Better-auth tables
   CREATE TABLE IF NOT EXISTS "user" (
@@ -1891,6 +1900,56 @@ export const dbManualBlocklist = {
     const stmt = db.prepare('SELECT domain FROM manual_blocklist');
     const rows = stmt.all() as Array<{ domain: string }>;
     return new Set(rows.map((row) => row.domain));
+  },
+};
+
+export const dbCache = {
+  set(domain: string, type: number, response: Buffer, expiresAt: number) {
+    const stmt = db.prepare(`
+      INSERT INTO dns_cache (domain, type, response, expiresAt)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(domain, type) DO UPDATE SET response = ?, expiresAt = ?
+    `);
+    stmt.run(domain.toLowerCase(), type, response, expiresAt, response, expiresAt);
+  },
+
+  get(domain: string, type: number): Buffer | null {
+    const stmt = db.prepare(`
+      SELECT response, expiresAt FROM dns_cache
+      WHERE domain = ? AND type = ?
+    `);
+    const row = stmt.get(domain.toLowerCase(), type) as { response: Buffer; expiresAt: number } | undefined;
+
+    if (!row) return null;
+
+    // Check if expired
+    if (Date.now() > row.expiresAt) {
+      this.delete(domain, type);
+      return null;
+    }
+
+    return row.response;
+  },
+
+  delete(domain: string, type: number) {
+    const stmt = db.prepare('DELETE FROM dns_cache WHERE domain = ? AND type = ?');
+    stmt.run(domain.toLowerCase(), type);
+  },
+
+  clear() {
+    db.exec('DELETE FROM dns_cache');
+  },
+
+  getAll(): Array<{ domain: string; type: number; response: Buffer; expiresAt: number }> {
+    const stmt = db.prepare('SELECT domain, type, response, expiresAt FROM dns_cache');
+    return stmt.all() as Array<{ domain: string; type: number; response: Buffer; expiresAt: number }>;
+  },
+
+  cleanupExpired() {
+    const now = Date.now();
+    const stmt = db.prepare('DELETE FROM dns_cache WHERE expiresAt < ?');
+    const result = stmt.run(now);
+    return result.changes;
   },
 };
 
