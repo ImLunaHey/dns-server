@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { join } from 'path';
 import { DNSQuery } from './dns-server.js';
+import { logger } from './logger.js';
 
 const dbPath = join(process.cwd(), 'dns-queries.db');
 const db = new Database(dbPath);
@@ -289,16 +290,16 @@ try {
   const columnNames = tableInfo.map((col) => col.name);
 
   if (!columnNames.includes('blockReason')) {
-    console.log('Adding blockReason column to queries table...');
+    logger.info('Adding blockReason column to queries table...');
     db.exec('ALTER TABLE queries ADD COLUMN blockReason TEXT');
   }
 
   if (!columnNames.includes('cached')) {
-    console.log('Adding cached column to queries table...');
+    logger.info('Adding cached column to queries table...');
     db.exec('ALTER TABLE queries ADD COLUMN cached INTEGER DEFAULT 0');
   }
 } catch (error) {
-  console.error('Error running migrations:', error);
+  logger.error('Error running migrations', error instanceof Error ? error : new Error(String(error)));
 }
 
 export const dbQueries = {

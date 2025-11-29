@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { DNSServer } from './dns-server.js';
+import { logger } from './logger.js';
 import {
   dbClientNames,
   dbAdlists,
@@ -609,7 +610,7 @@ app.all('/dns-query', async (c) => {
       });
     }
   } catch (error) {
-    console.error('DoH error:', error);
+    logger.error('DoH error', error instanceof Error ? error : new Error(String(error)));
     return c.text('Internal server error', 500);
   }
 });
@@ -661,7 +662,7 @@ app.post('/api/dns/test', requireAuth, async (c) => {
       rawResponse: response.toString('base64'),
     });
   } catch (error) {
-    console.error('DNS test error:', error);
+    logger.error('DNS test error', error instanceof Error ? error : new Error(String(error)));
     return c.json(
       {
         success: false,
@@ -1328,7 +1329,7 @@ app.put('/api/settings', requireAuth, async (c) => {
     const newDotEnabled = dotEnabled;
     if (newDotEnabled !== previousDotEnabled) {
       dotSettingsChanged = true;
-      console.log(`🔄 DoT enabled changed: ${previousDotEnabled} -> ${newDotEnabled}`);
+      logger.info('DoT enabled changed', { previous: previousDotEnabled, current: newDotEnabled });
     }
     dbSettings.set('dotEnabled', dotEnabled.toString());
   }
@@ -1336,7 +1337,7 @@ app.put('/api/settings', requireAuth, async (c) => {
   if (dotPort && typeof dotPort === 'number' && dotPort > 0) {
     if (dotPort !== previousDotPort) {
       dotSettingsChanged = true;
-      console.log(`🔄 DoT port changed: ${previousDotPort} -> ${dotPort}`);
+      logger.info('DoT port changed', { previous: previousDotPort, current: dotPort });
     }
     dbSettings.set('dotPort', dotPort.toString());
   }
@@ -1344,7 +1345,7 @@ app.put('/api/settings', requireAuth, async (c) => {
   if (dotCertPath && typeof dotCertPath === 'string') {
     if (dotCertPath !== previousDotCertPath) {
       dotSettingsChanged = true;
-      console.log(`🔄 DoT cert path changed: ${previousDotCertPath} -> ${dotCertPath}`);
+      logger.info('DoT cert path changed', { previous: previousDotCertPath, current: dotCertPath });
     }
     dbSettings.set('dotCertPath', dotCertPath);
   }
@@ -1352,24 +1353,24 @@ app.put('/api/settings', requireAuth, async (c) => {
   if (dotKeyPath && typeof dotKeyPath === 'string') {
     if (dotKeyPath !== previousDotKeyPath) {
       dotSettingsChanged = true;
-      console.log(`🔄 DoT key path changed: ${previousDotKeyPath} -> ${dotKeyPath}`);
+      logger.info('DoT key path changed', { previous: previousDotKeyPath, current: dotKeyPath });
     }
     dbSettings.set('dotKeyPath', dotKeyPath);
   }
 
   // Restart DoT server if settings changed
   if (dotSettingsChanged) {
-    console.log('🔄 Restarting DoT server due to settings change...');
+    logger.info('Restarting DoT server due to settings change...');
     try {
       await dnsServer.restartDoT();
-      console.log('✅ DoT server restarted with new settings');
+      logger.info('DoT server restarted with new settings');
     } catch (error) {
-      console.error('❌ Failed to restart DoT server:', error);
+      logger.error('Failed to restart DoT server', error instanceof Error ? error : new Error(String(error)));
       // Don't fail the request, just log the error
     }
   } else if (typeof dotEnabled === 'boolean' || dotPort || dotCertPath || dotKeyPath) {
     // Even if no change detected, if DoT settings were provided, verify they're correct
-    console.log('ℹ️  DoT settings updated but no change detected (may already be configured)');
+    logger.debug('DoT settings updated but no change detected (may already be configured)');
   }
 
   return c.json({ success: true, settings: dbSettings.getAll() });
@@ -2067,7 +2068,7 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
 
     return c.json({ success: true, message: 'Import completed successfully' });
   } catch (error) {
-    console.error('Import error:', error);
+    logger.error('Import error', error instanceof Error ? error : new Error(String(error)));
     return c.json({ error: 'Import failed', details: error instanceof Error ? error.message : 'Unknown error' }, 500);
   }
 });
@@ -2092,7 +2093,7 @@ async function runScheduledTasks() {
   for (const task of dueTasks) {
     if (task.taskType === 'blocklist-update') {
       try {
-        console.log('🔄 Running scheduled blocklist update...');
+        logger.info('Running scheduled blocklist update...');
         const updateId = dbBlocklistUpdates.startUpdate();
         const adlists = dbAdlists.getAll().filter((a) => a.enabled === 1);
         const urls = adlists.map((a) => a.url);
@@ -2102,14 +2103,14 @@ async function runScheduledTasks() {
           .then(() => {
             const blocklistSize = dnsServer.getBlocklistSize();
             dbBlocklistUpdates.completeUpdate(updateId, blocklistSize);
-            console.log('✅ Scheduled blocklist update completed');
+            logger.info('Scheduled blocklist update completed', { blocklistSize });
           })
           .catch((error) => {
-            console.error('❌ Scheduled blocklist update failed:', error);
+            logger.error('Scheduled blocklist update failed', error instanceof Error ? error : new Error(String(error)));
             dbBlocklistUpdates.failUpdate(updateId, error instanceof Error ? error.message : 'Unknown error');
           });
       } catch (error) {
-        console.error('Error running scheduled blocklist update:', error);
+        logger.error('Error running scheduled blocklist update', error instanceof Error ? error : new Error(String(error)));
       }
     }
 
@@ -2118,7 +2119,7 @@ async function runScheduledTasks() {
 }
 
 async function main() {
-  console.log('🔧 Initializing DNS server...');
+  logger.info('Initializing DNS server...');
 
   // Cleanup old queries based on retention setting
   const retentionDays = parseInt(dbSettings.get('queryRetentionDays', '7'), 10);
@@ -2135,15 +2136,19 @@ async function main() {
 
   // Start scheduled tasks runner
   setInterval(() => {
-    runScheduledTasks().catch(console.error);
+    runScheduledTasks().catch((error) => {
+      logger.error('Error running scheduled tasks', error instanceof Error ? error : new Error(String(error)));
+    });
   }, 60000); // Check every minute
 
   // Run immediately on startup
-  runScheduledTasks().catch(console.error);
+  runScheduledTasks().catch((error) => {
+    logger.error('Error running scheduled tasks', error instanceof Error ? error : new Error(String(error)));
+  });
 
   // Start HTTP API server
   const port = 3001;
-  console.log(`🌐 API server running on http://localhost:${port}`);
+  logger.info('API server running', { port, url: `http://localhost:${port}` });
 
   serve({
     fetch: app.fetch,
@@ -2151,4 +2156,7 @@ async function main() {
   });
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  logger.error('Fatal error in main', error instanceof Error ? error : new Error(String(error)));
+  process.exit(1);
+});

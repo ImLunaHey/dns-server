@@ -22,6 +22,7 @@ import {
   dbRateLimits,
   dbCache,
 } from './db.js';
+import { logger } from './logger.js';
 
 export interface DNSQuery {
   id: string;
@@ -199,7 +200,7 @@ export class DNSServer {
 
       return minTTL;
     } catch (error) {
-      console.error('Error extracting TTL from response:', error);
+      logger.error('Error extracting TTL from response', error instanceof Error ? error : new Error(String(error)));
       return null;
     }
   }
@@ -276,10 +277,10 @@ export class DNSServer {
       }
 
       if (loaded > 0 || expired > 0) {
-        console.log(`📦 Loaded ${loaded} cache entries from database, removed ${expired} expired entries`);
+        logger.info('Loaded cache entries from database', { loaded, expired });
       }
     } catch (error) {
-      console.error('Error loading cache from database:', error);
+      logger.error('Error loading cache from database', error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -325,7 +326,7 @@ export class DNSServer {
   }
 
   async loadBlocklist(urls: string[]) {
-    console.log('Loading blocklists...');
+    logger.info('Loading blocklists...');
     this.blocklistUrls = urls;
     // Clear existing blocklist before loading new ones
     this.blocklist.clear();
@@ -333,7 +334,7 @@ export class DNSServer {
     // Load manually added domains first
     const manualDomains = dbManualBlocklist.getDomains();
     manualDomains.forEach((domain) => this.blocklist.add(domain));
-    console.log(`Loaded ${manualDomains.size} manually added domains`);
+    logger.info('Loaded manually added domains', { count: manualDomains.size });
 
     // Load domains from adlists
     for (const url of urls) {
@@ -342,12 +343,12 @@ export class DNSServer {
         const text = await response.text();
         const domains = this.parseBlocklist(text);
         domains.forEach((domain) => this.blocklist.add(domain));
-        console.log(`Loaded ${domains.length} domains from ${url}`);
+        logger.info('Loaded domains from blocklist', { count: domains.length, url });
       } catch (error) {
-        console.error(`Failed to load blocklist from ${url}:`, error);
+        logger.error('Failed to load blocklist', error instanceof Error ? error : new Error(String(error)), { url });
       }
     }
-    console.log(`Total blocked domains: ${this.blocklist.size}`);
+    logger.info('Total blocked domains', { count: this.blocklist.size });
   }
 
   getBlocklistUrls(): string[] {
@@ -552,7 +553,7 @@ export class DNSServer {
 
       return { id, domain, type };
     } catch (error) {
-      console.error('Error parsing DNS query:', error);
+      logger.error('Error parsing DNS query', error instanceof Error ? error : new Error(String(error)));
       return null;
     }
   }
@@ -745,7 +746,10 @@ export class DNSServer {
     try {
       dbQueries.insert(query);
     } catch (error) {
-      console.error('Failed to save query to database:', error);
+      logger.error('Failed to save query to database', error instanceof Error ? error : new Error(String(error)), {
+        queryId: query.id,
+        domain: query.domain,
+      });
     }
   }
 
@@ -1016,7 +1020,7 @@ export class DNSServer {
       const rateLimitResult = dbRateLimits.checkRateLimit(clientIp, this.rateLimitMaxQueries, this.rateLimitWindowMs);
       if (!rateLimitResult.allowed) {
         // Rate limited - return NXDOMAIN
-        console.log(`⏱️ Rate limited: ${clientIp}`);
+        logger.warn('Rate limited', { clientIp });
         return this.createDNSResponse(msg, true);
       }
     }
@@ -1036,29 +1040,29 @@ export class DNSServer {
         // Return block page IP instead of NXDOMAIN
         const blockIP = type === 1 ? this.blockPageIP : this.getBlockPageIPv6();
         response = this.createDNSResponseWithIP(msg, blockIP, type);
-        console.log(`🚫 Blocked (block page): ${domain} -> ${blockIP}`);
+        logger.info('Blocked (block page)', { domain, blockIP, type });
       } else {
         response = this.createDNSResponse(msg, true);
-        console.log(`🚫 Blocked: ${domain}`);
+        logger.info('Blocked', { domain, blockReason: blockResult.reason });
       }
     } else if (localDNS && (type === 1 || type === 28)) {
       // Check if local DNS type matches query type
       const localType = localDNS.type === 'A' ? 1 : 28;
       if (localType === type) {
         response = this.createDNSResponseWithIP(msg, localDNS.ip, type);
-        console.log(`🏠 Local DNS: ${domain} -> ${localDNS.ip}`);
+        logger.debug('Local DNS', { domain, ip: localDNS.ip, type });
       } else {
         // Type mismatch, check cache first
         const cached = this.getCachedResponse(domain, type);
         if (cached) {
           response = cached;
           isCached = true;
-          console.log(`💾 Cached: ${domain}`);
+          logger.debug('Cached', { domain, type });
         } else {
           try {
             response = await this.forwardQuery(msg, domain, clientIp, useTcp);
             this.setCachedResponse(domain, type, response);
-            console.log(`✅ Allowed: ${domain}`);
+            logger.debug('Allowed', { domain, type });
           } catch (error) {
             this.errorCount++;
             throw error;
@@ -1071,12 +1075,12 @@ export class DNSServer {
       if (cached) {
         response = cached;
         isCached = true;
-        console.log(`💾 Cached: ${domain}`);
+        logger.debug('Cached', { domain, type });
       } else {
         try {
           response = await this.forwardQuery(msg, domain, clientIp, useTcp);
           this.setCachedResponse(domain, type, response);
-          console.log(`✅ Allowed: ${domain}`);
+          logger.debug('Allowed', { domain, type });
         } catch (error) {
           this.errorCount++;
           throw error;
@@ -1131,7 +1135,10 @@ export class DNSServer {
             responseLength.writeUInt16BE(response.length, 0);
             socket.write(Buffer.concat([responseLength, response]));
           } catch (error) {
-            console.error(`Error handling DNS query:`, error);
+            logger.error('Error handling DNS query', error instanceof Error ? error : new Error(String(error)), {
+              clientIp,
+              useTcp: true,
+            });
             const errorResponse = this.createDNSResponse(dnsMsg, true);
             const errorLength = Buffer.allocUnsafe(2);
             errorLength.writeUInt16BE(errorResponse.length, 0);
@@ -1145,7 +1152,7 @@ export class DNSServer {
     });
 
     socket.on('error', (err) => {
-      console.error('Connection error:', err);
+      logger.error('Connection error', err instanceof Error ? err : new Error(String(err)));
     });
 
     socket.on('close', () => {
@@ -1160,19 +1167,21 @@ export class DNSServer {
           const response = await this.handleDNSQuery(msg, rinfo.address, false);
           this.server.send(response, rinfo.port, rinfo.address);
         } catch (error) {
-          console.error(`Error handling UDP query:`, error);
+          logger.error('Error handling UDP query', error instanceof Error ? error : new Error(String(error)), {
+            clientIp: rinfo.address,
+          });
           const errorResponse = this.createDNSResponse(msg, true);
           this.server.send(errorResponse, rinfo.port, rinfo.address);
         }
       });
 
       this.server.on('error', (err) => {
-        console.error('UDP DNS server error:', err);
+        logger.error('UDP DNS server error', err instanceof Error ? err : new Error(String(err)));
         reject(err);
       });
 
       this.server.bind(this.port, () => {
-        console.log(`🚀 DNS server (UDP) running on port ${this.port}`);
+        logger.info('DNS server (UDP) running', { port: this.port });
         resolve();
       });
     });
@@ -1185,12 +1194,12 @@ export class DNSServer {
       });
 
       this.tcpServer.on('error', (err) => {
-        console.error('TCP DNS server error:', err);
+        logger.error('TCP DNS server error', err instanceof Error ? err : new Error(String(err)));
         reject(err);
       });
 
       this.tcpServer.listen(this.port, () => {
-        console.log(`🚀 DNS server (TCP) running on port ${this.port}`);
+        logger.info('DNS server (TCP) running', { port: this.port });
         resolve();
       });
     });
@@ -1207,8 +1216,10 @@ export class DNSServer {
       let keyPath = dbSettings.get('dotKeyPath', '').trim();
 
       if (!certPath || !keyPath) {
-        console.warn('⚠️  DoT server disabled: TLS certificates not configured');
-        console.warn('   Set dotCertPath and dotKeyPath in settings to enable');
+        logger.warn('DoT server disabled: TLS certificates not configured', {
+          certPath: certPath || 'not set',
+          keyPath: keyPath || 'not set',
+        });
         return Promise.resolve();
       }
 
@@ -1252,8 +1263,7 @@ export class DNSServer {
         }
       }
 
-      console.log(`📁 Detected project root: ${projectRoot}`);
-      console.log(`📁 Current working directory: ${process.cwd()}`);
+      logger.debug('Detected project root', { projectRoot, cwd: process.cwd() });
 
       // Resolve paths relative to project root
       // If path is already absolute, resolve() will return it as-is
@@ -1266,20 +1276,23 @@ export class DNSServer {
 
       // Check if files exist before trying to read them
       if (!existsSync(certPath)) {
-        console.error(`❌ Certificate file not found: ${certPath}`);
-        console.error(`   Original path: ${dbSettings.get('dotCertPath', '')}`);
-        console.error(`   Project root: ${projectRoot}`);
+        logger.error('Certificate file not found', new Error(`Certificate file not found: ${certPath}`), {
+          certPath,
+          originalPath: dbSettings.get('dotCertPath', ''),
+          projectRoot,
+        });
         throw new Error(`Certificate file not found: ${certPath}`);
       }
       if (!existsSync(keyPath)) {
-        console.error(`❌ Private key file not found: ${keyPath}`);
-        console.error(`   Original path: ${dbSettings.get('dotKeyPath', '')}`);
-        console.error(`   Project root: ${projectRoot}`);
+        logger.error('Private key file not found', new Error(`Private key file not found: ${keyPath}`), {
+          keyPath,
+          originalPath: dbSettings.get('dotKeyPath', ''),
+          projectRoot,
+        });
         throw new Error(`Private key file not found: ${keyPath}`);
       }
 
-      console.log(`📁 Using certificate: ${certPath}`);
-      console.log(`📁 Using private key: ${keyPath}`);
+      logger.debug('Using TLS certificates', { certPath, keyPath });
 
       const tlsOptions = {
         cert: fs.readFileSync(certPath),
@@ -1293,18 +1306,19 @@ export class DNSServer {
         });
 
         this.dotServer.on('error', (err) => {
-          console.error('DoT server error:', err);
+          logger.error('DoT server error', err instanceof Error ? err : new Error(String(err)));
           reject(err);
         });
 
         this.dotServer.listen(this.dotPort, () => {
-          console.log(`🔒 DNS server (DoT) running on port ${this.dotPort}`);
+          logger.info('DNS server (DoT) running', { port: this.dotPort });
           resolve();
         });
       });
     } catch (error) {
-      console.warn('⚠️  DoT server disabled:', error instanceof Error ? error.message : 'Unknown error');
-      console.warn('   Set dotEnabled=true, dotCertPath, and dotKeyPath in settings to enable');
+      logger.warn('DoT server disabled', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
       return Promise.resolve();
     }
   }
@@ -1338,7 +1352,7 @@ export class DNSServer {
     if (this.dotServer) {
       return new Promise<void>((resolve) => {
         this.dotServer!.close(() => {
-          console.log('🔒 DNS server (DoT) stopped');
+          logger.info('DNS server (DoT) stopped');
           this.dotServer = null;
           resolve();
         });
@@ -1348,23 +1362,23 @@ export class DNSServer {
   }
 
   async restartDoT(): Promise<void> {
-    console.log('🔄 Restarting DoT server...');
+    logger.info('Restarting DoT server...');
 
     // Stop existing DoT server if running
     await this.stopDoT();
 
     // Update dotPort from settings
     this.dotPort = parseInt(dbSettings.get('dotPort', '853'), 10);
-    console.log(`📝 DoT port set to: ${this.dotPort}`);
+    logger.debug('DoT port set', { port: this.dotPort });
 
     // Start DoT server if enabled
     const dotEnabled = dbSettings.get('dotEnabled', 'false') === 'true';
-    console.log(`📝 DoT enabled: ${dotEnabled}`);
+    logger.debug('DoT enabled', { enabled: dotEnabled });
 
     if (dotEnabled) {
       await this.startDoT();
     } else {
-      console.log('ℹ️  DoT is disabled, not starting server');
+      logger.debug('DoT is disabled, not starting server');
     }
   }
 }
