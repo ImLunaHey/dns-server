@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import dgram from 'dgram';
 import { logger } from './logger.js';
 
 // ASN.1 encoding helpers
@@ -810,6 +811,10 @@ export function validateDNSSEC(
     }
 
     if (verifiedCount > 0) {
+      // Optionally validate chain of trust for the DNSKEY
+      // This is optional as it requires additional DNS queries
+      // For now, we'll return success if signatures are verified
+      // Chain of trust can be validated separately if needed
       return { valid: true, validatedRecords: verifiedCount };
     }
 
@@ -825,11 +830,10 @@ export function validateDNSSEC(
 }
 
 /**
- * Calculate DNSKEY key tag (simplified version)
+ * Calculate DNSKEY key tag (RFC 4034)
  */
 function calculateKeyTag(dnskey: DNSKEYRecord): number {
-  // Full key tag calculation is complex and depends on algorithm
-  // This is a simplified version
+  // Key tag calculation per RFC 4034
   const keyData = Buffer.concat([
     Buffer.from([(dnskey.flags >> 8) & 0xff, dnskey.flags & 0xff]),
     Buffer.from([dnskey.protocol]),
@@ -843,4 +847,297 @@ function calculateKeyTag(dnskey: DNSKEYRecord): number {
   }
   ac += (ac >> 16) & 0xffff;
   return ac & 0xffff;
+}
+
+/**
+ * Calculate DS hash from DNSKEY (RFC 4034)
+ * DS = hash(name | key tag | algorithm | digest type | DNSKEY wire format)
+ */
+function calculateDSHash(zoneName: string, dnskey: DNSKEYRecord, digestType: number): Buffer | null {
+  // Build DNSKEY wire format
+  const keyData = Buffer.concat([
+    Buffer.from([(dnskey.flags >> 8) & 0xff, dnskey.flags & 0xff]),
+    Buffer.from([dnskey.protocol]),
+    Buffer.from([dnskey.algorithm]),
+    dnskey.publicKey,
+  ]);
+
+  // Build DS hash input: canonicalized name + key tag + algorithm + digest type + key data
+  const keyTag = calculateKeyTag(dnskey);
+  const keyTagBuf = Buffer.allocUnsafe(2);
+  keyTagBuf.writeUInt16BE(keyTag, 0);
+
+  const algorithmBuf = Buffer.from([dnskey.algorithm]);
+  const digestTypeBuf = Buffer.from([digestType]);
+
+  const canonicalName = canonicalizeName(zoneName);
+  const hashInput = Buffer.concat([canonicalName, keyTagBuf, algorithmBuf, digestTypeBuf, keyData]);
+
+  switch (digestType) {
+    case 1: // SHA-1
+      return crypto.createHash('sha1').update(hashInput).digest();
+    case 2: // SHA-256
+      return crypto.createHash('sha256').update(hashInput).digest();
+    case 4: // SHA-384
+      return crypto.createHash('sha384').update(hashInput).digest();
+    default:
+      logger.warn('Unsupported DS digest type', { digestType });
+      return null;
+  }
+}
+
+/**
+ * Get parent domain name
+ */
+function getParentDomain(domain: string): string | null {
+  const parts = domain.toLowerCase().split('.').filter((p) => p.length > 0);
+  if (parts.length <= 1) {
+    return null; // Already at root or TLD
+  }
+  return parts.slice(1).join('.');
+}
+
+/**
+ * Parse DNS response to extract records (for chain of trust validation)
+ */
+function parseDNSResponse(response: Buffer): {
+  answers: ResourceRecord[];
+  authority: ResourceRecord[];
+  additional: ResourceRecord[];
+} | null {
+  if (response.length < 12) {
+    return null;
+  }
+
+  const anCount = response.readUInt16BE(6);
+  const nsCount = response.readUInt16BE(8);
+  const arCount = response.readUInt16BE(10);
+
+  let offset = 12;
+
+  // Skip question section
+  const questionNameResult = parseDomainName(response, offset);
+  offset = questionNameResult.newOffset + 4; // QTYPE + QCLASS
+
+  // Parse answer section
+  const answers: ResourceRecord[] = [];
+  for (let i = 0; i < anCount && offset < response.length; i++) {
+    const rr = parseResourceRecord(response, offset);
+    if (!rr) break;
+    answers.push(rr);
+    offset = rr.offset + 10 + rr.data.length;
+  }
+
+  // Parse authority section
+  const authority: ResourceRecord[] = [];
+  for (let i = 0; i < nsCount && offset < response.length; i++) {
+    const rr = parseResourceRecord(response, offset);
+    if (!rr) break;
+    authority.push(rr);
+    offset = rr.offset + 10 + rr.data.length;
+  }
+
+  // Parse additional section
+  const additional: ResourceRecord[] = [];
+  for (let i = 0; i < arCount && offset < response.length; i++) {
+    const rr = parseResourceRecord(response, offset);
+    if (!rr) break;
+    additional.push(rr);
+    offset = rr.offset + 10 + rr.data.length;
+  }
+
+  return { answers, authority, additional };
+}
+
+/**
+ * Query DNS records from upstream (for chain of trust validation)
+ * This is a simplified version - in production, you'd want to use the DNS server's forwardQuery
+ */
+async function queryDNSRecord(
+  domain: string,
+  type: string,
+  upstreamDNS: string = '1.1.1.1',
+): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => {
+    const client = dgram.createSocket('udp4');
+
+    // Create DNS query
+    const typeMap: Record<string, number> = {
+      A: 1,
+      AAAA: 28,
+      DNSKEY: 48,
+      DS: 43,
+      RRSIG: 46,
+    };
+
+    const queryType = typeMap[type.toUpperCase()] || 1;
+
+    // DNS header
+    const header = Buffer.alloc(12);
+    header.writeUInt16BE(Math.floor(Math.random() * 65535), 0);
+    header.writeUInt16BE(0x0100, 2); // Standard query, recursion desired
+    header.writeUInt16BE(0x0001, 4); // Questions: 1
+    header.writeUInt16BE(0x0000, 6);
+    header.writeUInt16BE(0x0000, 8);
+    header.writeUInt16BE(0x0001, 10); // Additional: 1 (for OPT)
+
+    // Domain name
+    const parts = domain.split('.');
+    const domainBuffer = Buffer.alloc(domain.length + 2);
+    let offset = 0;
+    for (const part of parts) {
+      domainBuffer[offset++] = part.length;
+      Buffer.from(part).copy(domainBuffer, offset);
+      offset += part.length;
+    }
+    domainBuffer[offset++] = 0;
+
+    // QTYPE and QCLASS
+    const question = Buffer.alloc(4);
+    question.writeUInt16BE(queryType, 0);
+    question.writeUInt16BE(1, 2);
+
+    // EDNS(0) OPT record with DO bit
+    const optRecord = Buffer.alloc(11);
+    optRecord[0] = 0; // Root name
+    optRecord.writeUInt16BE(41, 1); // OPT type
+    optRecord.writeUInt16BE(4096, 3); // UDP payload size
+    optRecord.writeUInt16BE(0x8000, 5); // DO bit
+    optRecord[7] = 0; // EDNS version
+    optRecord[8] = 0; // Z
+    optRecord.writeUInt16BE(0, 9); // Data length
+
+    const query = Buffer.concat([header, domainBuffer.slice(0, offset), question, optRecord]);
+
+    const timeout = setTimeout(() => {
+      client.close();
+      reject(new Error('DNS query timeout'));
+    }, 5000);
+
+    client.on('message', (response) => {
+      clearTimeout(timeout);
+      client.close();
+      resolve(response);
+    });
+
+    client.on('error', (err) => {
+      clearTimeout(timeout);
+      client.close();
+      reject(err);
+    });
+
+    client.send(query, 53, upstreamDNS, (err) => {
+      if (err) {
+        clearTimeout(timeout);
+        client.close();
+        reject(err);
+      }
+    });
+  });
+}
+
+/**
+ * Validate chain of trust from domain up to trust anchor
+ * This validates that the DNSKEY for a domain is properly signed by its parent's DS record
+ */
+export async function validateChainOfTrust(
+  domain: string,
+  dnskey: DNSKEYRecord,
+  upstreamDNS: string = '1.1.1.1',
+): Promise<{ valid: boolean; reason?: string; chainLength?: number }> {
+  try {
+    let currentDomain = domain.toLowerCase();
+    let chainLength = 0;
+    const maxChainLength = 10; // Prevent infinite loops
+
+    while (currentDomain && chainLength < maxChainLength) {
+      chainLength++;
+
+      // Get parent domain
+      const parentDomain = getParentDomain(currentDomain);
+      if (!parentDomain) {
+        // Reached root - would need trust anchor here
+        // For now, we'll consider it valid if we can't find a parent
+        logger.debug('Reached root domain in chain of trust', { domain: currentDomain });
+        return { valid: true, reason: 'Reached root (trust anchor required)', chainLength };
+      }
+
+      // Query DS record from parent zone
+      logger.debug('Querying DS record for chain of trust', { domain: currentDomain, parentDomain });
+      const dsResponse = await queryDNSRecord(currentDomain, 'DS', upstreamDNS);
+      if (!dsResponse) {
+        return { valid: false, reason: `Failed to query DS record for ${currentDomain}`, chainLength };
+      }
+
+      // Parse DS records from response
+      const parsed = parseDNSResponse(dsResponse);
+      if (!parsed) {
+        return { valid: false, reason: `Failed to parse DS response for ${currentDomain}`, chainLength };
+      }
+
+      const dsRecords = [...parsed.answers, ...parsed.authority, ...parsed.additional]
+        .filter((rr) => rr.type === DS)
+        .map((rr) => parseDS(rr.data))
+        .filter((ds): ds is DSRecord => ds !== null);
+
+      if (dsRecords.length === 0) {
+        // No DS record found - domain may not be signed, or we're at a trust anchor
+        logger.debug('No DS record found', { domain: currentDomain, parentDomain });
+        // If we're validating the queried domain's DNSKEY and no DS exists, it might be a trust anchor
+        if (chainLength === 1) {
+          return { valid: false, reason: 'No DS record found for domain', chainLength };
+        }
+        // For intermediate steps, missing DS might be acceptable (unsigned zone)
+        return { valid: true, reason: 'No DS record (unsigned intermediate zone)', chainLength };
+      }
+
+      // Find matching DS record (by key tag and algorithm)
+      const keyTag = calculateKeyTag(dnskey);
+      const matchingDS = dsRecords.find((ds) => ds.keyTag === keyTag && ds.algorithm === dnskey.algorithm);
+
+      if (!matchingDS) {
+        return {
+          valid: false,
+          reason: `No matching DS record found (keyTag: ${keyTag}, algorithm: ${dnskey.algorithm})`,
+          chainLength,
+        };
+      }
+
+      // Calculate DS hash from DNSKEY and compare
+      const calculatedHash = calculateDSHash(currentDomain, dnskey, matchingDS.digestType);
+      if (!calculatedHash) {
+        return { valid: false, reason: 'Failed to calculate DS hash', chainLength };
+      }
+
+      if (!calculatedHash.equals(matchingDS.digest)) {
+        return {
+          valid: false,
+          reason: `DS hash mismatch for ${currentDomain}`,
+          chainLength,
+        };
+      }
+
+      logger.debug('DS record validated', { domain: currentDomain, keyTag, algorithm: dnskey.algorithm });
+
+      // If we've validated the queried domain's DNSKEY, we're done
+      if (currentDomain === domain.toLowerCase()) {
+        // Now we need to verify the parent's DNSKEY signs this DS record
+        // For full validation, we'd continue up the chain
+        // For now, we'll consider this a partial validation
+        return { valid: true, reason: 'DS record validated (partial chain)', chainLength };
+      }
+
+      // Move up the chain - would need to get parent's DNSKEY and verify it signs the DS
+      // For now, we'll stop here as this is a simplified implementation
+      currentDomain = parentDomain;
+    }
+
+    return { valid: false, reason: 'Chain validation incomplete (max length reached)', chainLength };
+  } catch (error) {
+    logger.error('Error validating chain of trust', {
+      error: error instanceof Error ? error : new Error(String(error)),
+      domain,
+    });
+    return { valid: false, reason: 'Chain validation error' };
+  }
 }

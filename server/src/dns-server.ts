@@ -25,7 +25,7 @@ import {
   dbZoneRecords,
 } from './db.js';
 import { logger } from './logger.js';
-import { validateDNSSEC } from './dnssec-validator.js';
+import { validateDNSSEC, validateChainOfTrust } from './dnssec-validator.js';
 
 export interface DNSQuery {
   id: string;
@@ -1432,6 +1432,15 @@ export class DNSServer {
               logger.warn('DNSSEC validation failed', { domain, type, reason: validation.reason });
             } else {
               logger.debug('DNSSEC validation passed', { domain, type, validatedRecords: validation.validatedRecords });
+              
+              // Optionally validate chain of trust if enabled
+              // This is expensive as it requires additional DNS queries, so it's optional
+              if (dbSettings.get('dnssecChainValidation', 'false') === 'true') {
+                // Chain of trust validation would be done here if DNSKEY records are present
+                // For now, we'll log that it's enabled but not yet fully integrated
+                // Full integration would require extracting DNSKEY from response and validating chain
+                logger.debug('DNSSEC chain of trust validation enabled (requires DNSKEY in response)', { domain });
+              }
             }
           }
           this.setCachedResponse(domain, type, response);

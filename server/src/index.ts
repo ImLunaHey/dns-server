@@ -1275,6 +1275,7 @@ app.get('/api/settings', requireAuth, (c) => {
     dotCertPath: dbSettings.get('dotCertPath', ''),
     dotKeyPath: dbSettings.get('dotKeyPath', ''),
     dnssecValidation: dbSettings.get('dnssecValidation', 'false') === 'true',
+    dnssecChainValidation: dbSettings.get('dnssecChainValidation', 'false') === 'true',
   });
 });
 
@@ -1295,6 +1296,7 @@ app.put('/api/settings', requireAuth, async (c) => {
     dotCertPath,
     dotKeyPath,
     dnssecValidation,
+    dnssecChainValidation,
   } = await c.req.json();
 
   if (upstreamDNS && typeof upstreamDNS === 'string') {
@@ -1382,6 +1384,10 @@ app.put('/api/settings', requireAuth, async (c) => {
 
   if (typeof dnssecValidation === 'boolean') {
     dbSettings.set('dnssecValidation', dnssecValidation.toString());
+  }
+
+  if (typeof dnssecChainValidation === 'boolean') {
+    dbSettings.set('dnssecChainValidation', dnssecChainValidation.toString());
   }
 
   // Restart DoT server if settings changed

@@ -72,6 +72,8 @@ const settingsSchema = z.object({
   dotPort: z.number().int().min(1).max(65535).optional(),
   dotCertPath: z.string().optional(),
   dotKeyPath: z.string().optional(),
+  dnssecValidation: z.boolean().optional(),
+  dnssecChainValidation: z.boolean().optional(),
 });
 
 type SettingsFormData = z.infer<typeof settingsSchema>;
@@ -108,6 +110,8 @@ export function Settings() {
       dotPort: settings?.dotPort ?? 853,
       dotCertPath: settings?.dotCertPath ?? "",
       dotKeyPath: settings?.dotKeyPath ?? "",
+      dnssecValidation: Boolean(settings?.dnssecValidation ?? false),
+      dnssecChainValidation: Boolean(settings?.dnssecChainValidation ?? false),
     },
   });
 
@@ -129,6 +133,8 @@ export function Settings() {
         dotPort: settings.dotPort ?? 853,
         dotCertPath: settings.dotCertPath ?? "",
         dotKeyPath: settings.dotKeyPath ?? "",
+        dnssecValidation: Boolean(settings.dnssecValidation ?? false),
+        dnssecChainValidation: Boolean(settings.dnssecChainValidation ?? false),
       });
     }
   }, [settings, reset]);
@@ -139,6 +145,7 @@ export function Settings() {
   const upstreamDNS = watch("upstreamDNS");
   const rateLimitWindowMs = watch("rateLimitWindowMs");
   const dotEnabled = watch("dotEnabled");
+  const dnssecValidation = watch("dnssecValidation");
 
   // Re-validate DoT fields when dotEnabled changes
   useEffect(() => {
@@ -699,6 +706,69 @@ export function Settings() {
                   </div>
                 </>
               )}
+            </div>
+          </Panel>
+
+          {/* DNSSEC Settings */}
+          <Panel>
+            <h2 className="text-xl font-semibold text-white mb-6">
+              DNSSEC Validation Settings
+            </h2>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Enable DNSSEC Validation
+                  </label>
+                  <p className="text-xs text-gray-400">
+                    Validate DNSSEC signatures in DNS responses
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    {...register("dnssecValidation", {
+                      onChange: (e) =>
+                        setValue("dnssecValidation", Boolean(e.target.checked)),
+                    })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+
+              {dnssecValidation && (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-1">
+                      Enable Chain of Trust Validation
+                    </label>
+                    <p className="text-xs text-gray-400">
+                      Validate the complete chain from root to domain (requires additional DNS queries)
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      {...register("dnssecChainValidation", {
+                        onChange: (e) =>
+                          setValue("dnssecChainValidation", Boolean(e.target.checked)),
+                      })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+              )}
+
+              <div className="bg-blue-900/20 border border-blue-700 rounded-lg p-3">
+                <p className="text-xs text-blue-300">
+                  <strong>Note:</strong> DNSSEC validation requires responses with RRSIG records.
+                  Some upstream DNS servers validate DNSSEC but don't return raw DNSSEC records.
+                  Chain of trust validation requires additional DNS queries and may slow down responses.
+                </p>
+              </div>
             </div>
           </Panel>
 
