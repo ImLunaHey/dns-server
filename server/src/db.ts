@@ -1,9 +1,14 @@
 import Database from 'better-sqlite3';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { DNSQuery } from './dns-server.js';
 import { logger } from './logger.js';
 
-const dbPath = join(process.cwd(), 'dns-queries.db');
+// Use temporary database for tests
+const isTest = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
+const dbPath = isTest
+  ? join(tmpdir(), `dns-queries-test-${Date.now()}-${Math.random().toString(36).substring(7)}.db`)
+  : join(process.cwd(), 'dns-queries.db');
 const db = new Database(dbPath);
 
 // Create tables
@@ -928,9 +933,7 @@ export const dbQueries = {
         WHERE responseTime IS NOT NULL
         ORDER BY responseTime
       `);
-      const responseTimes = (percentileStmt.all() as Array<{ responseTime: number }>).map(
-        (r) => r.responseTime,
-      );
+      const responseTimes = (percentileStmt.all() as Array<{ responseTime: number }>).map((r) => r.responseTime);
 
       if (responseTimes.length > 0) {
         const getPercentile = (percentile: number): number => {
@@ -945,8 +948,7 @@ export const dbQueries = {
     }
 
     // Cache hit rate
-    const cacheHitRate =
-      totalQueries > 0 ? (cachedQueries / totalQueries) * 100 : 0;
+    const cacheHitRate = totalQueries > 0 ? (cachedQueries / totalQueries) * 100 : 0;
 
     return {
       totalQueries,
@@ -1127,6 +1129,33 @@ export const dbQueries = {
       totalCount: number;
       blockRate: number;
     }>;
+  },
+
+  getPopularDomains(
+    sinceTimestamp: number,
+    minQueries: number = 10,
+  ): Array<{ domain: string; type: number; count: number }> {
+    const stmt = db.prepare(`
+      SELECT 
+        domain,
+        CASE 
+          WHEN type = 'A' THEN 1
+          WHEN type = 'AAAA' THEN 28
+          WHEN type = 'MX' THEN 15
+          WHEN type = 'TXT' THEN 16
+          WHEN type = 'NS' THEN 2
+          WHEN type = 'CNAME' THEN 5
+          ELSE 1
+        END as type,
+        COUNT(*) as count
+      FROM queries
+      WHERE timestamp >= ? AND blocked = 0
+      GROUP BY domain, type
+      HAVING count >= ?
+      ORDER BY count DESC
+      LIMIT 100
+    `);
+    return stmt.all(sinceTimestamp, minQueries) as Array<{ domain: string; type: number; count: number }>;
   },
 };
 
@@ -2238,20 +2267,22 @@ export const dbZones = {
       FROM zones 
       WHERE id = ?
     `);
-    return stmt.get(id) as {
-      id: number;
-      domain: string;
-      enabled: number;
-      soa_serial: number;
-      soa_refresh: number;
-      soa_retry: number;
-      soa_expire: number;
-      soa_minimum: number;
-      soa_mname: string;
-      soa_rname: string;
-      createdAt: number;
-      updatedAt: number;
-    } | undefined;
+    return stmt.get(id) as
+      | {
+          id: number;
+          domain: string;
+          enabled: number;
+          soa_serial: number;
+          soa_refresh: number;
+          soa_retry: number;
+          soa_expire: number;
+          soa_minimum: number;
+          soa_mname: string;
+          soa_rname: string;
+          createdAt: number;
+          updatedAt: number;
+        }
+      | undefined;
   },
 
   getByDomain(domain: string) {
@@ -2261,20 +2292,22 @@ export const dbZones = {
       FROM zones 
       WHERE domain = ? AND enabled = 1
     `);
-    return stmt.get(domain.toLowerCase()) as {
-      id: number;
-      domain: string;
-      enabled: number;
-      soa_serial: number;
-      soa_refresh: number;
-      soa_retry: number;
-      soa_expire: number;
-      soa_minimum: number;
-      soa_mname: string;
-      soa_rname: string;
-      createdAt: number;
-      updatedAt: number;
-    } | undefined;
+    return stmt.get(domain.toLowerCase()) as
+      | {
+          id: number;
+          domain: string;
+          enabled: number;
+          soa_serial: number;
+          soa_refresh: number;
+          soa_retry: number;
+          soa_expire: number;
+          soa_minimum: number;
+          soa_mname: string;
+          soa_rname: string;
+          createdAt: number;
+          updatedAt: number;
+        }
+      | undefined;
   },
 
   findZoneForDomain(domain: string) {
@@ -2291,17 +2324,20 @@ export const dbZones = {
     return undefined;
   },
 
-  update(id: number, updates: {
-    domain?: string;
-    enabled?: boolean;
-    soa_serial?: number;
-    soa_refresh?: number;
-    soa_retry?: number;
-    soa_expire?: number;
-    soa_minimum?: number;
-    soa_mname?: string;
-    soa_rname?: string;
-  }) {
+  update(
+    id: number,
+    updates: {
+      domain?: string;
+      enabled?: boolean;
+      soa_serial?: number;
+      soa_refresh?: number;
+      soa_retry?: number;
+      soa_expire?: number;
+      soa_minimum?: number;
+      soa_mname?: string;
+      soa_rname?: string;
+    },
+  ) {
     const now = Date.now();
     const fields: string[] = [];
     const values: unknown[] = [];
@@ -2425,28 +2461,33 @@ export const dbZoneRecords = {
 
   getById(id: number) {
     const stmt = db.prepare('SELECT * FROM zone_records WHERE id = ?');
-    return stmt.get(id) as {
-      id: number;
-      zone_id: number;
-      name: string;
-      type: string;
-      ttl: number;
-      data: string;
-      priority: number | null;
-      enabled: number;
-      createdAt: number;
-      updatedAt: number;
-    } | undefined;
+    return stmt.get(id) as
+      | {
+          id: number;
+          zone_id: number;
+          name: string;
+          type: string;
+          ttl: number;
+          data: string;
+          priority: number | null;
+          enabled: number;
+          createdAt: number;
+          updatedAt: number;
+        }
+      | undefined;
   },
 
-  update(id: number, updates: {
-    name?: string;
-    type?: string;
-    ttl?: number;
-    data?: string;
-    priority?: number | null;
-    enabled?: boolean;
-  }) {
+  update(
+    id: number,
+    updates: {
+      name?: string;
+      type?: string;
+      ttl?: number;
+      data?: string;
+      priority?: number | null;
+      enabled?: boolean;
+    },
+  ) {
     const now = Date.now();
     const fields: string[] = [];
     const values: unknown[] = [];

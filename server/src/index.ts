@@ -1267,6 +1267,11 @@ app.get('/api/settings', requireAuth, (c) => {
     rateLimitWindowMs: parseInt(dbSettings.get('rateLimitWindowMs', '60000'), 10),
     cacheEnabled: cacheStats.enabled,
     cacheSize: cacheStats.size,
+    serveStaleEnabled: cacheStats.serveStaleEnabled,
+    serveStaleMaxAge: cacheStats.serveStaleMaxAge,
+    prefetchEnabled: cacheStats.prefetchEnabled,
+    prefetchThreshold: cacheStats.prefetchThreshold,
+    prefetchMinQueries: cacheStats.prefetchMinQueries,
     blockPageEnabled: blockPageStatus.enabled,
     blockPageIP: blockPageStatus.ipv4,
     blockPageIPv6: blockPageStatus.ipv6,
@@ -1302,6 +1307,11 @@ app.put('/api/settings', requireAuth, async (c) => {
     rateLimitMaxQueries,
     rateLimitWindowMs,
     cacheEnabled,
+    serveStaleEnabled,
+    serveStaleMaxAge,
+    prefetchEnabled,
+    prefetchThreshold,
+    prefetchMinQueries,
     blockPageEnabled,
     blockPageIP,
     blockPageIPv6,
@@ -1354,6 +1364,26 @@ app.put('/api/settings', requireAuth, async (c) => {
 
   if (typeof cacheEnabled === 'boolean') {
     dnsServer.setCacheEnabled(cacheEnabled);
+  }
+
+  if (typeof serveStaleEnabled === 'boolean') {
+    dnsServer.setServeStaleEnabled(serveStaleEnabled);
+  }
+
+  if (serveStaleMaxAge && typeof serveStaleMaxAge === 'number' && serveStaleMaxAge > 0) {
+    dnsServer.setServeStaleMaxAge(serveStaleMaxAge);
+  }
+
+  if (typeof prefetchEnabled === 'boolean') {
+    dnsServer.setPrefetchEnabled(prefetchEnabled);
+  }
+
+  if (prefetchThreshold && typeof prefetchThreshold === 'number' && prefetchThreshold > 0 && prefetchThreshold <= 1) {
+    dnsServer.setPrefetchThreshold(prefetchThreshold);
+  }
+
+  if (prefetchMinQueries && typeof prefetchMinQueries === 'number' && prefetchMinQueries > 0) {
+    dnsServer.setPrefetchMinQueries(prefetchMinQueries);
   }
 
   if (typeof blockPageEnabled === 'boolean') {

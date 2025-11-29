@@ -69,7 +69,7 @@ export class DNSServer {
   private server: dgram.Socket;
   private tcpServer: net.Server;
   private dotServer: tls.Server | null = null;
-  // @ts-expect-error - QUIC is experimental in Node.js
+  // @ts-ignore - QUIC is experimental in Node.js
   private doqServer: any | null = null;
   private blocklist: Set<string> = new Set();
   private blocklistUrls: string[] = [];
@@ -85,6 +85,11 @@ export class DNSServer {
   private cache: Map<string, CachedDNSResponse> = new Map();
   private cacheEnabled: boolean = true;
   private cacheTTL: number = 300; // 5 minutes default
+  private serveStaleEnabled: boolean = false;
+  private serveStaleMaxAge: number = 604800; // 7 days in seconds
+  private prefetchEnabled: boolean = false;
+  private prefetchThreshold: number = 0.8; // Prefetch when 80% of TTL has passed
+  private prefetchMinQueries: number = 10; // Minimum queries to be eligible for prefetching
   private blockPageEnabled: boolean = false;
   private blockPageIP: string = '0.0.0.0'; // Default block IP
   private startTime: number = Date.now();
@@ -104,6 +109,11 @@ export class DNSServer {
     this.rateLimitMaxQueries = parseInt(dbSettings.get('rateLimitMaxQueries', '1000'), 10);
     this.rateLimitWindowMs = parseInt(dbSettings.get('rateLimitWindowMs', '60000'), 10);
     this.cacheEnabled = dbSettings.get('cacheEnabled', 'true') === 'true';
+    this.serveStaleEnabled = dbSettings.get('serveStaleEnabled', 'false') === 'true';
+    this.serveStaleMaxAge = parseInt(dbSettings.get('serveStaleMaxAge', '604800'), 10); // 7 days default
+    this.prefetchEnabled = dbSettings.get('prefetchEnabled', 'false') === 'true';
+    this.prefetchThreshold = parseFloat(dbSettings.get('prefetchThreshold', '0.8')); // 80% of TTL
+    this.prefetchMinQueries = parseInt(dbSettings.get('prefetchMinQueries', '10'), 10);
     this.blockPageEnabled = dbSettings.get('blockPageEnabled', 'false') === 'true';
     this.blockPageIP = dbSettings.get('blockPageIP', '0.0.0.0');
 
@@ -117,6 +127,17 @@ export class DNSServer {
       this.cleanupCache();
     }, 60000); // Every minute
 
+    // Prefetch popular domains periodically
+    if (this.prefetchEnabled) {
+      setInterval(() => {
+        this.prefetchPopularDomains().catch((error) => {
+          logger.error('Error prefetching domains', {
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+        });
+      }, 300000); // Every 5 minutes
+    }
+
     // Load cache from database on startup
     if (this.cacheEnabled) {
       this.loadCacheFromDB();
@@ -127,15 +148,26 @@ export class DNSServer {
     return `${domain.toLowerCase()}:${type}`;
   }
 
-  private getCachedResponse(domain: string, type: number): Buffer | null {
+  private getCachedResponse(domain: string, type: number, allowStale: boolean = false): Buffer | null {
     if (!this.cacheEnabled) return null;
 
     const key = this.getCacheKey(domain, type);
+    const now = Date.now();
 
     // First check in-memory cache
     const cached = this.cache.get(key);
     if (cached) {
-      if (Date.now() > cached.expiresAt) {
+      if (now > cached.expiresAt) {
+        // Entry expired
+        if (allowStale && this.serveStaleEnabled) {
+          // Check if stale entry is within max age
+          const ageSeconds = (now - cached.expiresAt) / 1000;
+          if (ageSeconds <= this.serveStaleMaxAge) {
+            logger.debug('Serving stale cache entry', { domain, type, ageSeconds: Math.floor(ageSeconds) });
+            return cached.response;
+          }
+        }
+        // Too old or serve stale disabled, delete it
         this.cache.delete(key);
         dbCache.delete(domain, type);
         return null;
@@ -144,19 +176,54 @@ export class DNSServer {
     }
 
     // If not in memory, check database
-    const dbResponse = dbCache.get(domain, type);
-    if (dbResponse) {
-      // Load into memory cache for faster access
+    // For stale entries, we need to query directly since dbCache.get() filters expired entries
+    if (allowStale && this.serveStaleEnabled) {
       const dbCached = dbCache.getAll().find((c) => c.domain === domain.toLowerCase() && c.type === type);
       if (dbCached) {
+        if (now > dbCached.expiresAt) {
+          // Entry expired - check if within max age
+          const ageSeconds = (now - dbCached.expiresAt) / 1000;
+          if (ageSeconds <= this.serveStaleMaxAge) {
+            logger.debug('Serving stale cache entry from database', { domain, type, ageSeconds: Math.floor(ageSeconds) });
+            // Load into memory for faster access
+            this.cache.set(key, {
+              response: dbCached.response,
+              expiresAt: dbCached.expiresAt,
+              domain: domain.toLowerCase(),
+              type,
+            });
+            return dbCached.response;
+          }
+          // Too old, delete it
+          dbCache.delete(domain, type);
+          return null;
+        }
+        // Still valid, load into memory
         this.cache.set(key, {
-          response: dbResponse,
+          response: dbCached.response,
           expiresAt: dbCached.expiresAt,
           domain: domain.toLowerCase(),
           type,
         });
+        return dbCached.response;
       }
-      return dbResponse;
+    } else {
+      // Normal lookup - use dbCache.get() which filters expired entries
+      const dbResponse = dbCache.get(domain, type);
+      if (dbResponse) {
+        // Load into memory cache for faster access
+        const dbCached = dbCache.getAll().find((c) => c.domain === domain.toLowerCase() && c.type === type);
+        if (dbCached) {
+          // Still valid, load into memory
+          this.cache.set(key, {
+            response: dbResponse,
+            expiresAt: dbCached.expiresAt,
+            domain: domain.toLowerCase(),
+            type,
+          });
+        }
+        return dbResponse;
+      }
     }
 
     return null;
@@ -308,6 +375,11 @@ export class DNSServer {
     return {
       size: this.cache.size,
       enabled: this.cacheEnabled,
+      serveStaleEnabled: this.serveStaleEnabled,
+      serveStaleMaxAge: this.serveStaleMaxAge,
+      prefetchEnabled: this.prefetchEnabled,
+      prefetchThreshold: this.prefetchThreshold,
+      prefetchMinQueries: this.prefetchMinQueries,
     };
   }
 
@@ -317,6 +389,142 @@ export class DNSServer {
     if (!enabled) {
       this.cache.clear();
     }
+  }
+
+  setServeStaleEnabled(enabled: boolean) {
+    this.serveStaleEnabled = enabled;
+    dbSettings.set('serveStaleEnabled', enabled.toString());
+  }
+
+  setServeStaleMaxAge(maxAgeSeconds: number) {
+    this.serveStaleMaxAge = maxAgeSeconds;
+    dbSettings.set('serveStaleMaxAge', maxAgeSeconds.toString());
+  }
+
+  setPrefetchEnabled(enabled: boolean) {
+    this.prefetchEnabled = enabled;
+    dbSettings.set('prefetchEnabled', enabled.toString());
+  }
+
+  setPrefetchThreshold(threshold: number) {
+    this.prefetchThreshold = threshold;
+    dbSettings.set('prefetchThreshold', threshold.toString());
+  }
+
+  setPrefetchMinQueries(minQueries: number) {
+    this.prefetchMinQueries = minQueries;
+    dbSettings.set('prefetchMinQueries', minQueries.toString());
+  }
+
+  /**
+   * Prefetch popular domains that are close to expiring
+   */
+  private async prefetchPopularDomains(): Promise<void> {
+    if (!this.prefetchEnabled || !this.cacheEnabled) {
+      return;
+    }
+
+    try {
+      // Get popular domains from query log (last 24 hours)
+      const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const popularDomains = dbQueries.getPopularDomains(oneDayAgo, this.prefetchMinQueries);
+
+      let prefetched = 0;
+      const now = Date.now();
+
+      for (const { domain, type, count } of popularDomains) {
+        const key = this.getCacheKey(domain, type);
+        const cached = this.cache.get(key);
+
+        if (!cached) {
+          // Not in memory cache, check database
+          const dbCached = dbCache.getAll().find((c) => c.domain === domain.toLowerCase() && c.type === type);
+          if (!dbCached) continue;
+
+          // Check if close to expiring
+          const age = (now - dbCached.expiresAt) / 1000;
+          if (age >= 0) continue; // Already expired
+          const ttl = -age; // Time until expiration
+          const originalTTL = ttl / (1 - this.prefetchThreshold);
+          const agePercent = Math.abs(age) / originalTTL;
+          if (agePercent < this.prefetchThreshold) {
+            continue; // Not close enough to expiring
+          }
+        } else {
+          // Check if close to expiring
+          const age = (now - cached.expiresAt) / 1000;
+          if (age >= 0) {
+            // Already expired, skip
+            continue;
+          }
+          const ttl = -age; // Time until expiration
+          const originalTTL = ttl / (1 - this.prefetchThreshold);
+          const agePercent = Math.abs(age) / originalTTL;
+          if (agePercent < this.prefetchThreshold) {
+            continue; // Not close enough to expiring
+          }
+        }
+
+        // Prefetch this domain
+        try {
+          const query = this.createDNSQuery(domain, type === 1 ? 'A' : type === 28 ? 'AAAA' : 'A');
+          const response = await this.forwardQuery(query, domain);
+          this.setCachedResponse(domain, type, response);
+          prefetched++;
+          logger.debug('Prefetched domain', { domain, type, count });
+        } catch (error) {
+          // Silently fail prefetch - don't log errors for background tasks
+        }
+      }
+
+      if (prefetched > 0) {
+        logger.info('Prefetched domains', { count: prefetched });
+      }
+    } catch (error) {
+      logger.error('Error in prefetch task', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
+  }
+
+  /**
+   * Create a DNS query buffer from domain and type
+   */
+  private createDNSQuery(domain: string, type: string): Buffer {
+    const typeMap: Record<string, number> = {
+      A: 1,
+      AAAA: 28,
+      MX: 15,
+      TXT: 16,
+      NS: 2,
+      CNAME: 5,
+    };
+
+    const queryType = typeMap[type.toUpperCase()] || 1;
+
+    const header = Buffer.alloc(12);
+    header.writeUInt16BE(Math.floor(Math.random() * 65535), 0);
+    header.writeUInt16BE(0x0100, 2);
+    header.writeUInt16BE(0x0001, 4);
+    header.writeUInt16BE(0x0000, 6);
+    header.writeUInt16BE(0x0000, 8);
+    header.writeUInt16BE(0x0000, 10);
+
+    const parts = domain.split('.');
+    const domainBuffer = Buffer.alloc(domain.length + 2);
+    let offset = 0;
+    for (const part of parts) {
+      domainBuffer[offset++] = part.length;
+      Buffer.from(part).copy(domainBuffer, offset);
+      offset += part.length;
+    }
+    domainBuffer[offset++] = 0;
+
+    const question = Buffer.alloc(4);
+    question.writeUInt16BE(queryType, 0);
+    question.writeUInt16BE(1, 2);
+
+    return Buffer.concat([header, domainBuffer.slice(0, offset), question]);
   }
 
   getBlockPageIPv6(): string {
@@ -1153,6 +1361,7 @@ export class DNSServer {
       udp: boolean;
       tcp: boolean;
       dot: boolean;
+      doq: boolean;
       doh: boolean;
     };
   } {
@@ -1416,7 +1625,15 @@ export class DNSServer {
             logger.debug('Allowed', { domain, type });
           } catch (error) {
             this.errorCount++;
-            throw error;
+            // Try to serve stale cache if upstream fails
+            const staleResponse = this.getCachedResponse(domain, type, true);
+            if (staleResponse) {
+              logger.info('Upstream query failed, serving stale cache', { domain, type });
+              response = staleResponse;
+              isCached = true;
+            } else {
+              throw error;
+            }
           }
         }
       }
@@ -1437,7 +1654,7 @@ export class DNSServer {
               logger.warn('DNSSEC validation failed', { domain, type, reason: validation.reason });
             } else {
               logger.debug('DNSSEC validation passed', { domain, type, validatedRecords: validation.validatedRecords });
-              
+
               // Optionally validate chain of trust if enabled
               // This is expensive as it requires additional DNS queries, so it's optional
               if (dbSettings.get('dnssecChainValidation', 'false') === 'true') {
@@ -1452,7 +1669,15 @@ export class DNSServer {
           logger.debug('Allowed', { domain, type });
         } catch (error) {
           this.errorCount++;
-          throw error;
+          // Try to serve stale cache if upstream fails
+          const staleResponse = this.getCachedResponse(domain, type, true);
+          if (staleResponse) {
+            logger.info('Upstream query failed, serving stale cache', { domain, type });
+            response = staleResponse;
+            isCached = true;
+          } else {
+            throw error;
+          }
         }
       }
     }
@@ -1780,9 +2005,9 @@ export class DNSServer {
       // QUIC support is experimental and may not be available
       let createQuicSocket: any;
       try {
-        // @ts-expect-error - QUIC is experimental
+        // @ts-ignore - QUIC is experimental
         const netModule = await import('net');
-        // @ts-expect-error - QUIC is experimental
+        // @ts-ignore - QUIC is experimental
         createQuicSocket = netModule.createQuicSocket;
       } catch {
         // QUIC not available

@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  dns-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dns-server
+    # Run as root to bind to port 53
+    # In production, consider using --cap-add=NET_BIND_SERVICE instead
+    privileged: true
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+      - "853:853/tcp"
+      - "853:853/udp"
+      - "3001:3001/tcp"
+    volumes:
+      # Persist database and cache
+      - ./server/dns.db:/app/server/dns.db
+      - ./server/dns-queries.db:/app/server/dns-queries.db
+      # TLS certificates for DoT/DoQ
+      - ./server/certs:/app/server/certs
+      # Optional: mount data directory
+      - ./data:/app/data
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    networks:
+      - dns-network
+
+networks:
+  dns-network:
+    driver: bridge
+
