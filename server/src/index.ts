@@ -65,6 +65,413 @@ app.on(['POST', 'GET'], '/api/auth/*', (c) => {
   return auth.handler(c.req.raw);
 });
 
+// Helper function to create DNS query from domain and type
+function createDNSQueryFromParams(domain: string, type: string): Buffer {
+  const typeMap: Record<string, number> = {
+    A: 1,
+    AAAA: 28,
+    MX: 15,
+    TXT: 16,
+    NS: 2,
+    CNAME: 5,
+    SOA: 6,
+    PTR: 12,
+    SRV: 33,
+  };
+
+  const queryType = typeMap[type.toUpperCase()] || 1;
+
+  // DNS header
+  const header = Buffer.alloc(12);
+  header.writeUInt16BE(0x1234, 0); // ID
+  header.writeUInt16BE(0x0100, 2); // Flags: standard query, recursion desired
+  header.writeUInt16BE(0x0001, 4); // Questions: 1
+  header.writeUInt16BE(0x0000, 6); // Answers: 0
+  header.writeUInt16BE(0x0000, 8); // Authority: 0
+  header.writeUInt16BE(0x0000, 10); // Additional: 0
+
+  // Domain name
+  const parts = domain.split('.');
+  const domainBuffer = Buffer.alloc(domain.length + 2);
+  let offset = 0;
+  for (const part of parts) {
+    domainBuffer[offset++] = part.length;
+    Buffer.from(part).copy(domainBuffer, offset);
+    offset += part.length;
+  }
+  domainBuffer[offset++] = 0; // Null terminator
+
+  // QTYPE and QCLASS
+  const question = Buffer.alloc(4);
+  question.writeUInt16BE(queryType, 0); // QTYPE
+  question.writeUInt16BE(1, 2); // QCLASS (IN = 1)
+
+  return Buffer.concat([header, domainBuffer.slice(0, offset), question]);
+}
+
+// Helper function to parse domain name from DNS response
+function parseDomainName(response: Buffer, offset: number): { name: string; newOffset: number } {
+  const nameParts: string[] = [];
+  let currentOffset = offset;
+  const visitedOffsets = new Set<number>();
+
+  while (currentOffset < response.length) {
+    if (visitedOffsets.has(currentOffset)) {
+      // Prevent infinite loops from compression pointers
+      break;
+    }
+    visitedOffsets.add(currentOffset);
+
+    const length = response[currentOffset];
+
+    if (length === 0) {
+      currentOffset++;
+      break;
+    }
+
+    // Compression pointer
+    if ((length & 0xc0) === 0xc0) {
+      const pointer = ((length & 0x3f) << 8) | response[currentOffset + 1];
+      if (pointer >= response.length) break;
+      currentOffset += 2;
+      // Follow compression pointer
+      const decompressed = parseDomainName(response, pointer);
+      nameParts.push(...decompressed.name.split('.'));
+      break;
+    }
+
+    // Regular label
+    if (currentOffset + 1 + length > response.length) break;
+    nameParts.push(response.toString('utf8', currentOffset + 1, currentOffset + 1 + length));
+    currentOffset += length + 1;
+  }
+
+  const name = nameParts.join('.');
+  return { name: name || '.', newOffset: currentOffset };
+}
+
+// Helper function to parse a DNS resource record
+function parseResourceRecord(
+  response: Buffer,
+  offset: number,
+): { name: string; type: number; TTL: number; data: string; newOffset: number } | null {
+  if (offset + 10 > response.length) return null;
+
+  const nameResult = parseDomainName(response, offset);
+  const name = nameResult.name;
+  let currentOffset = nameResult.newOffset;
+
+  if (currentOffset + 10 > response.length) return null;
+
+  const rrType = response.readUInt16BE(currentOffset);
+  const rrClass = response.readUInt16BE(currentOffset + 2);
+  const ttl = response.readUInt32BE(currentOffset + 4);
+  const dataLength = response.readUInt16BE(currentOffset + 8);
+  currentOffset += 10;
+
+  if (currentOffset + dataLength > response.length) return null;
+
+  let data = '';
+  if (rrType === 1) {
+    // A record
+    data = `${response[currentOffset]}.${response[currentOffset + 1]}.${response[currentOffset + 2]}.${
+      response[currentOffset + 3]
+    }`;
+  } else if (rrType === 28) {
+    // AAAA record
+    const parts: string[] = [];
+    for (let j = 0; j < 16; j += 2) {
+      const val = response.readUInt16BE(currentOffset + j);
+      parts.push(val.toString(16).padStart(4, '0'));
+    }
+    // Compress IPv6
+    let ipv6 = parts.join(':');
+    ipv6 = ipv6.replace(/\b0+([0-9a-f])/gi, '$1');
+    const zeroGroups = ipv6.match(/(:0)+:?/g);
+    if (zeroGroups) {
+      const longest = zeroGroups.reduce((a, b) => (a.length > b.length ? a : b));
+      ipv6 = ipv6.replace(longest, '::');
+    }
+    data = ipv6;
+  } else if (rrType === 5) {
+    // CNAME
+    const nameResult = parseDomainName(response, currentOffset);
+    data = nameResult.name.endsWith('.') ? nameResult.name : nameResult.name + '.';
+  } else if (rrType === 15) {
+    // MX
+    const priority = response.readUInt16BE(currentOffset);
+    const nameResult = parseDomainName(response, currentOffset + 2);
+    const mxName = nameResult.name.endsWith('.') ? nameResult.name : nameResult.name + '.';
+    data = `${priority} ${mxName}`;
+  } else if (rrType === 2) {
+    // NS
+    const nameResult = parseDomainName(response, currentOffset);
+    data = nameResult.name.endsWith('.') ? nameResult.name : nameResult.name + '.';
+  } else if (rrType === 16) {
+    // TXT
+    let txtOffset = currentOffset;
+    const txtParts: string[] = [];
+    while (txtOffset < currentOffset + dataLength) {
+      const txtLen = response[txtOffset];
+      if (txtOffset + 1 + txtLen > currentOffset + dataLength) break;
+      txtParts.push(response.toString('utf8', txtOffset + 1, txtOffset + 1 + txtLen));
+      txtOffset += txtLen + 1;
+    }
+    data = txtParts.join('');
+  } else {
+    // For other types, return hex
+    data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
+  }
+
+  return {
+    name: name.endsWith('.') ? name : name + '.',
+    type: rrType,
+    TTL: ttl,
+    data,
+    newOffset: currentOffset + dataLength,
+  };
+}
+
+// Helper function to parse DNS response to JSON (Cloudflare format)
+function parseDNSResponseToJSON(response: Buffer, domain: string, type: string): unknown {
+  const typeMap: Record<string, number> = {
+    A: 1,
+    AAAA: 28,
+    MX: 15,
+    TXT: 16,
+    NS: 2,
+    CNAME: 5,
+    SOA: 6,
+    PTR: 12,
+    SRV: 33,
+  };
+
+  if (response.length < 12) {
+    return { error: 'Invalid DNS response' };
+  }
+
+  const flags = response.readUInt16BE(2);
+  const rcode = flags & 0x0f;
+  const qdCount = response.readUInt16BE(4);
+  const anCount = response.readUInt16BE(6);
+  const nsCount = response.readUInt16BE(8);
+  const arCount = response.readUInt16BE(10);
+
+  const answers: Array<{ name: string; type: number; TTL: number; data: string }> = [];
+  const authority: Array<{ name: string; type: number; TTL: number; data: string }> = [];
+  const additional: Array<{ name: string; type: number; TTL: number; data: string }> = [];
+  let offset = 12;
+
+  // Parse question section
+  let questionName = domain;
+  for (let i = 0; i < qdCount; i++) {
+    const nameResult = parseDomainName(response, offset);
+    questionName = nameResult.name;
+    offset = nameResult.newOffset;
+    if (offset + 4 > response.length) break;
+    offset += 4; // QTYPE + QCLASS
+  }
+
+  // Parse answer section
+  for (let i = 0; i < anCount && offset < response.length; i++) {
+    const rr = parseResourceRecord(response, offset);
+    if (!rr) break;
+    answers.push({ name: rr.name, type: rr.type, TTL: rr.TTL, data: rr.data });
+    offset = rr.newOffset;
+  }
+
+  // Parse authority section
+  for (let i = 0; i < nsCount && offset < response.length; i++) {
+    const rr = parseResourceRecord(response, offset);
+    if (!rr) break;
+    authority.push({ name: rr.name, type: rr.type, TTL: rr.TTL, data: rr.data });
+    offset = rr.newOffset;
+  }
+
+  // Parse additional section
+  for (let i = 0; i < arCount && offset < response.length; i++) {
+    const rr = parseResourceRecord(response, offset);
+    if (!rr) break;
+    additional.push({ name: rr.name, type: rr.type, TTL: rr.TTL, data: rr.data });
+    offset = rr.newOffset;
+  }
+
+  const result: {
+    Status: number;
+    TC: boolean;
+    RD: boolean;
+    RA: boolean;
+    AD: boolean;
+    CD: boolean;
+    Question: Array<{ name: string; type: number }>;
+    Answer?: Array<{ name: string; type: number; TTL: number; data: string }>;
+    Authority?: Array<{ name: string; type: number; TTL: number; data: string }>;
+    Additional?: Array<{ name: string; type: number; TTL: number; data: string }>;
+  } = {
+    Status: rcode,
+    TC: (flags & 0x0200) !== 0,
+    RD: (flags & 0x0100) !== 0,
+    RA: (flags & 0x0080) !== 0,
+    AD: (flags & 0x0020) !== 0,
+    CD: (flags & 0x0010) !== 0,
+    Question: [
+      { name: questionName.endsWith('.') ? questionName : questionName + '.', type: typeMap[type.toUpperCase()] || 1 },
+    ],
+  };
+
+  if (answers.length > 0) result.Answer = answers;
+  if (authority.length > 0) result.Authority = authority;
+  if (additional.length > 0) result.Additional = additional;
+
+  return result;
+}
+
+// DNS-over-HTTPS (DoH) endpoint - RFC 8484
+// Supports both binary (application/dns-message) and JSON (application/dns-json) formats
+app.all('/dns-query', async (c) => {
+  try {
+    // Get client IP from request headers (standard for DoH)
+    const forwardedFor = c.req.header('x-forwarded-for');
+    const realIp = c.req.header('x-real-ip');
+    const cfConnectingIp = c.req.header('cf-connecting-ip');
+
+    const clientIp = forwardedFor?.split(',')[0]?.trim() || realIp?.trim() || cfConnectingIp?.trim() || 'unknown';
+
+    // Check if client wants JSON format
+    const accept = c.req.header('accept') || '';
+    const wantsJSON = accept.includes('application/dns-json');
+
+    let dnsMessage: Buffer;
+    let queryDomain = '';
+    let queryType = 'A';
+
+    if (wantsJSON) {
+      // JSON format: use query parameters (Cloudflare format)
+      queryDomain = c.req.query('name') || '';
+      queryType = c.req.query('type') || 'A';
+
+      if (!queryDomain) {
+        return c.json({ error: 'Missing "name" query parameter' }, 400);
+      }
+
+      // Support do (DNSSEC) and cd (disable validation) parameters
+      const doParam = c.req.query('do');
+      const cdParam = c.req.query('cd');
+
+      // Validate do parameter
+      if (doParam && doParam !== '' && doParam !== '0' && doParam !== 'false' && doParam !== '1' && doParam !== 'true') {
+        return c.json(
+          { error: `Invalid DO flag \`${doParam}\`. Expected to be empty or one of \`0\`, \`false\`, \`1\`, or \`true\`.` },
+          400,
+        );
+      }
+
+      // Validate cd parameter
+      if (cdParam && cdParam !== '' && cdParam !== '0' && cdParam !== 'false' && cdParam !== '1' && cdParam !== 'true') {
+        return c.json(
+          { error: `Invalid CD flag \`${cdParam}\`. Expected to be empty or one of \`0\`, \`false\`, \`1\`, or \`true\`.` },
+          400,
+        );
+      }
+
+      dnsMessage = createDNSQueryFromParams(queryDomain, queryType);
+
+      // Set DO bit if requested (DNSSEC)
+      if (doParam === '1' || doParam === 'true') {
+        const flags = dnsMessage.readUInt16BE(2);
+        dnsMessage.writeUInt16BE(flags | 0x8000, 2); // Set DO bit (EDNS(0) OPT pseudo-RR needed, but we'll set the flag)
+      }
+
+      // Set CD bit if requested (disable validation)
+      if (cdParam === '1' || cdParam === 'true') {
+        const flags = dnsMessage.readUInt16BE(2);
+        dnsMessage.writeUInt16BE(flags | 0x0010, 2); // Set CD bit
+      }
+    } else if (c.req.method === 'POST') {
+      // POST: DNS message in request body
+      const contentType = c.req.header('content-type') || '';
+      if (!contentType.includes('application/dns-message')) {
+        return c.text('Content-Type must be application/dns-message', 400);
+      }
+
+      const body = await c.req.arrayBuffer();
+      dnsMessage = Buffer.from(body);
+    } else if (c.req.method === 'GET') {
+      // GET: DNS message in 'dns' query parameter (base64url encoded)
+      const dnsParam = c.req.query('dns');
+      if (!dnsParam) {
+        return c.text('Missing "dns" query parameter', 400);
+      }
+
+      try {
+        // Decode base64url to buffer
+        const base64 = dnsParam.replace(/-/g, '+').replace(/_/g, '/');
+        const padding = (4 - (base64.length % 4)) % 4;
+        dnsMessage = Buffer.from(base64 + '='.repeat(padding), 'base64');
+      } catch (error) {
+        return c.text('Invalid base64url encoding in "dns" parameter', 400);
+      }
+    } else {
+      return c.text('Method not allowed', 405);
+    }
+
+    // Validate DNS message size
+    if (dnsMessage.length > 65535) {
+      return wantsJSON ? c.json({ error: 'DNS message too large' }, 400) : c.text('DNS message too large', 400);
+    }
+
+    if (dnsMessage.length < 12) {
+      return wantsJSON
+        ? c.json({ error: 'DNS message too short' }, 400)
+        : c.text('DNS message too short (minimum 12 bytes for DNS header)', 400);
+    }
+
+    // Basic DNS header validation
+    const flags = dnsMessage.readUInt16BE(2);
+    if ((flags & 0x8000) !== 0) {
+      return wantsJSON
+        ? c.json({ error: 'Invalid DNS message: expected query, got response' }, 400)
+        : c.text('Invalid DNS message: expected query, got response', 400);
+    }
+
+    // Handle the DNS query
+    const response = await dnsServer.handleDNSQuery(dnsMessage, clientIp, false);
+
+    // Return response in requested format
+    if (wantsJSON) {
+      const jsonResponse = parseDNSResponseToJSON(response, queryDomain, queryType);
+      return c.json(jsonResponse, 200, {
+        'Content-Type': 'application/dns-json',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Accept',
+      });
+    } else {
+      return c.body(response, 200, {
+        'Content-Type': 'application/dns-message',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      });
+    }
+  } catch (error) {
+    console.error('DoH error:', error);
+    return c.text('Internal server error', 500);
+  }
+});
+
+// OPTIONS for CORS preflight
+app.options('/dns-query', (c) => {
+  return c.text('', 200, {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400',
+  });
+});
+
 // Public API Routes (no auth required)
 app.get('/api/stats', (c) => {
   return c.json(dnsServer.getStats());

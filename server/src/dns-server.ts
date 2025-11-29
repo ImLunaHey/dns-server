@@ -1,4 +1,5 @@
 import dgram from 'dgram';
+import net from 'net';
 import {
   dbQueries,
   dbLocalDNS,
@@ -47,6 +48,7 @@ interface CachedDNSResponse {
 
 export class DNSServer {
   private server: dgram.Socket;
+  private tcpServer: net.Server;
   private blocklist: Set<string> = new Set();
   private blocklistUrls: string[] = [];
   private blockingEnabled: boolean = true;
@@ -64,6 +66,7 @@ export class DNSServer {
 
   constructor() {
     this.server = dgram.createSocket('udp4');
+    this.tcpServer = net.createServer();
     this.upstreamDNS = dbSettings.get('upstreamDNS', '1.1.1.1');
     this.port = parseInt(dbSettings.get('dnsPort', '53'), 10);
     this.rateLimitEnabled = dbSettings.get('rateLimitEnabled', 'false') === 'true';
@@ -366,16 +369,41 @@ export class DNSServer {
       let offset = 12;
       let domain = '';
 
+      // Parse domain name with proper bounds checking
       while (offset < msg.length) {
         const length = msg[offset];
+
+        // Check for end of domain name
         if (length === 0) {
           offset++;
           break;
         }
 
+        // Check for compression pointer (starts with 11 in high bits)
+        if ((length & 0xc0) === 0xc0) {
+          // Compression pointer - skip it and break
+          offset += 2;
+          break;
+        }
+
+        // Validate we have enough bytes for this label
+        if (offset + 1 + length > msg.length) {
+          return null; // Malformed: label extends beyond buffer
+        }
+
         if (domain.length > 0) domain += '.';
         domain += msg.toString('utf8', offset + 1, offset + 1 + length);
         offset += length + 1;
+
+        // Safety check: prevent infinite loops
+        if (offset > msg.length || domain.length > 255) {
+          return null;
+        }
+      }
+
+      // Validate we have enough bytes for QTYPE and QCLASS (4 bytes total)
+      if (offset + 4 > msg.length) {
+        return null; // Malformed: not enough bytes for QTYPE/QCLASS
       }
 
       const type = msg.readUInt16BE(offset);
@@ -475,7 +503,7 @@ export class DNSServer {
     return bytes;
   }
 
-  private async forwardQuery(msg: Buffer, domain: string, clientIp?: string): Promise<Buffer> {
+  private async forwardQuery(msg: Buffer, domain: string, clientIp?: string, useTcp: boolean = false): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       // Priority: client-specific DNS > conditional forwarding > default upstream
       let targetDNS = this.upstreamDNS;
@@ -495,34 +523,79 @@ export class DNSServer {
         }
       }
 
-      // Detect if upstream DNS is IPv6 or IPv4
-      const isIPv6 = targetDNS.includes(':');
-      const socketType = isIPv6 ? 'udp6' : 'udp4';
-      const client = dgram.createSocket(socketType);
-      const timeout = setTimeout(() => {
-        client.close();
-        reject(new Error('DNS query timeout'));
-      }, 5000);
+      if (useTcp) {
+        // Forward over TCP
+        const isIPv6 = targetDNS.includes(':');
+        const socket = net.createConnection({ host: targetDNS, port: 53, family: isIPv6 ? 6 : 4 });
 
-      client.on('message', (response) => {
-        clearTimeout(timeout);
-        client.close();
-        resolve(response);
-      });
+        const timeout = setTimeout(() => {
+          socket.destroy();
+          reject(new Error('DNS query timeout'));
+        }, 5000);
 
-      client.on('error', (err) => {
-        clearTimeout(timeout);
-        client.close();
-        reject(err);
-      });
+        // TCP DNS messages have a 2-byte length prefix
+        const lengthPrefix = Buffer.allocUnsafe(2);
+        lengthPrefix.writeUInt16BE(msg.length, 0);
+        const tcpMsg = Buffer.concat([lengthPrefix, msg]);
 
-      client.send(msg, 53, targetDNS, (err) => {
-        if (err) {
+        let responseLength: number | null = null;
+        let responseBuffer = Buffer.alloc(0);
+
+        socket.on('data', (data: Buffer) => {
+          responseBuffer = Buffer.concat([responseBuffer, data]);
+
+          if (responseLength === null && responseBuffer.length >= 2) {
+            responseLength = responseBuffer.readUInt16BE(0);
+          }
+
+          if (responseLength !== null && responseBuffer.length >= responseLength + 2) {
+            clearTimeout(timeout);
+            socket.destroy();
+            // Extract the DNS message (skip the 2-byte length prefix)
+            const dnsResponse = responseBuffer.slice(2, responseLength + 2);
+            resolve(dnsResponse);
+          }
+        });
+
+        socket.on('error', (err) => {
+          clearTimeout(timeout);
+          socket.destroy();
+          reject(err);
+        });
+
+        socket.on('connect', () => {
+          socket.write(tcpMsg);
+        });
+      } else {
+        // Forward over UDP (existing logic)
+        const isIPv6 = targetDNS.includes(':');
+        const socketType = isIPv6 ? 'udp6' : 'udp4';
+        const client = dgram.createSocket(socketType);
+        const timeout = setTimeout(() => {
+          client.close();
+          reject(new Error('DNS query timeout'));
+        }, 5000);
+
+        client.on('message', (response) => {
+          clearTimeout(timeout);
+          client.close();
+          resolve(response);
+        });
+
+        client.on('error', (err) => {
           clearTimeout(timeout);
           client.close();
           reject(err);
-        }
-      });
+        });
+
+        client.send(msg, 53, targetDNS, (err) => {
+          if (err) {
+            clearTimeout(timeout);
+            client.close();
+            reject(err);
+          }
+        });
+      }
     });
   }
 
@@ -693,116 +766,181 @@ export class DNSServer {
     dbRateLimits.unblock(clientIp);
   }
 
-  async start() {
-    this.server.on('message', async (msg, rinfo) => {
-      const startTime = Date.now();
-      const parsed = this.parseDNSQuery(msg);
+  async handleDNSQuery(msg: Buffer, clientIp: string, useTcp: boolean = false): Promise<Buffer> {
+    const startTime = Date.now();
+    const parsed = this.parseDNSQuery(msg);
 
-      if (!parsed) {
-        console.error('Failed to parse DNS query');
-        return;
+    if (!parsed) {
+      throw new Error('Failed to parse DNS query');
+    }
+
+    const { id, domain, type } = parsed;
+
+    // Check rate limiting first
+    if (this.rateLimitEnabled && clientIp) {
+      const rateLimitResult = dbRateLimits.checkRateLimit(clientIp, this.rateLimitMaxQueries, this.rateLimitWindowMs);
+      if (!rateLimitResult.allowed) {
+        // Rate limited - return NXDOMAIN
+        console.log(`⏱️ Rate limited: ${clientIp}`);
+        return this.createDNSResponse(msg, true);
       }
+    }
 
-      const { id, domain, type } = parsed;
-      const clientIp = rinfo.address;
+    // Check local DNS first
+    const localDNS = dbLocalDNS.getByDomain(domain);
+    const blockResult = this.isBlocked(domain, clientIp);
+    const blocked = blockResult.blocked;
 
-      // Check rate limiting first
-      if (this.rateLimitEnabled && clientIp) {
-        const rateLimitResult = dbRateLimits.checkRateLimit(clientIp, this.rateLimitMaxQueries, this.rateLimitWindowMs);
-        if (!rateLimitResult.allowed) {
-          // Rate limited - return NXDOMAIN
-          const response = this.createDNSResponse(msg, true);
-          this.server.send(response, rinfo.port, rinfo.address);
-          console.log(`⏱️ Rate limited: ${clientIp}`);
-          return;
-        }
+    const queryId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const query: DNSQuery = {
+      id: queryId,
+      domain,
+      type: type === 1 ? 'A' : type === 28 ? 'AAAA' : `TYPE${type}`,
+      blocked,
+      timestamp: Date.now(),
+      clientIp,
+      blockReason: blockResult.reason,
+    };
+
+    let response: Buffer;
+
+    if (blocked) {
+      if (this.blockPageEnabled && (type === 1 || type === 28)) {
+        // Return block page IP instead of NXDOMAIN
+        const blockIP = type === 1 ? this.blockPageIP : this.getBlockPageIPv6();
+        response = this.createDNSResponseWithIP(msg, blockIP, type);
+        console.log(`🚫 Blocked (block page): ${domain} -> ${blockIP}`);
+      } else {
+        response = this.createDNSResponse(msg, true);
+        console.log(`🚫 Blocked: ${domain}`);
       }
-
-      // Check local DNS first
-      const localDNS = dbLocalDNS.getByDomain(domain);
-      const blockResult = this.isBlocked(domain, clientIp);
-      const blocked = blockResult.blocked;
-
-      const queryId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      const query: DNSQuery = {
-        id: queryId,
-        domain,
-        type: type === 1 ? 'A' : type === 28 ? 'AAAA' : `TYPE${type}`,
-        blocked,
-        timestamp: Date.now(),
-        clientIp,
-        blockReason: blockResult.reason,
-      };
-
-      try {
-        let response: Buffer;
-
-        if (blocked) {
-          if (this.blockPageEnabled && (type === 1 || type === 28)) {
-            // Return block page IP instead of NXDOMAIN
-            const blockIP = type === 1 ? this.blockPageIP : this.getBlockPageIPv6();
-            response = this.createDNSResponseWithIP(msg, blockIP, type);
-            console.log(`🚫 Blocked (block page): ${domain} -> ${blockIP}`);
-          } else {
-            response = this.createDNSResponse(msg, true);
-            console.log(`🚫 Blocked: ${domain}`);
-          }
-        } else if (localDNS && (type === 1 || type === 28)) {
-          // Check if local DNS type matches query type
-          const localType = localDNS.type === 'A' ? 1 : 28;
-          if (localType === type) {
-            response = this.createDNSResponseWithIP(msg, localDNS.ip, type);
-            console.log(`🏠 Local DNS: ${domain} -> ${localDNS.ip}`);
-          } else {
-            // Type mismatch, check cache first
-            const cached = this.getCachedResponse(domain, type);
-            if (cached) {
-              response = cached;
-              console.log(`💾 Cached: ${domain}`);
-            } else {
-              response = await this.forwardQuery(msg, domain, clientIp);
-              this.setCachedResponse(domain, type, response);
-              console.log(`✅ Allowed: ${domain}`);
-            }
-          }
+    } else if (localDNS && (type === 1 || type === 28)) {
+      // Check if local DNS type matches query type
+      const localType = localDNS.type === 'A' ? 1 : 28;
+      if (localType === type) {
+        response = this.createDNSResponseWithIP(msg, localDNS.ip, type);
+        console.log(`🏠 Local DNS: ${domain} -> ${localDNS.ip}`);
+      } else {
+        // Type mismatch, check cache first
+        const cached = this.getCachedResponse(domain, type);
+        if (cached) {
+          response = cached;
+          console.log(`💾 Cached: ${domain}`);
         } else {
-          // Check cache first
-          const cached = this.getCachedResponse(domain, type);
-          if (cached) {
-            response = cached;
-            console.log(`💾 Cached: ${domain}`);
-          } else {
-            response = await this.forwardQuery(msg, domain, clientIp);
-            this.setCachedResponse(domain, type, response);
-            console.log(`✅ Allowed: ${domain}`);
-          }
+          response = await this.forwardQuery(msg, domain, clientIp, useTcp);
+          this.setCachedResponse(domain, type, response);
+          console.log(`✅ Allowed: ${domain}`);
         }
+      }
+    } else {
+      // Check cache first
+      const cached = this.getCachedResponse(domain, type);
+      if (cached) {
+        response = cached;
+        console.log(`💾 Cached: ${domain}`);
+      } else {
+        response = await this.forwardQuery(msg, domain, clientIp, useTcp);
+        this.setCachedResponse(domain, type, response);
+        console.log(`✅ Allowed: ${domain}`);
+      }
+    }
 
-        query.responseTime = Date.now() - startTime;
-        this.addQuery(query);
-        // Stats are now calculated from database, no need to update in-memory stats
+    query.responseTime = Date.now() - startTime;
+    this.addQuery(query);
 
+    return response;
+  }
+
+  async start() {
+    // UDP DNS Server
+    this.server.on('message', async (msg, rinfo) => {
+      try {
+        const response = await this.handleDNSQuery(msg, rinfo.address, false);
         this.server.send(response, rinfo.port, rinfo.address);
       } catch (error) {
-        console.error(`Error handling query for ${domain}:`, error);
+        console.error(`Error handling UDP query:`, error);
         const errorResponse = this.createDNSResponse(msg, true);
         this.server.send(errorResponse, rinfo.port, rinfo.address);
       }
     });
 
     this.server.on('error', (err) => {
-      console.error('DNS server error:', err);
+      console.error('UDP DNS server error:', err);
+    });
+
+    // TCP DNS Server
+    this.tcpServer.on('connection', (socket) => {
+      const clientIp = socket.remoteAddress || 'unknown';
+      let buffer = Buffer.alloc(0);
+      let expectedLength: number | null = null;
+
+      socket.on('data', async (data: Buffer) => {
+        buffer = Buffer.concat([buffer, data]);
+
+        // TCP DNS messages have a 2-byte length prefix
+        while (buffer.length >= 2) {
+          if (expectedLength === null) {
+            expectedLength = buffer.readUInt16BE(0);
+          }
+
+          // Check if we have the complete message (length prefix + message)
+          if (buffer.length >= expectedLength + 2) {
+            // Extract the DNS message (skip the 2-byte length prefix)
+            const dnsMsg = buffer.slice(2, expectedLength + 2);
+            // Remove processed data from buffer
+            buffer = buffer.slice(expectedLength + 2);
+            expectedLength = null;
+
+            try {
+              const response = await this.handleDNSQuery(dnsMsg, clientIp, true);
+
+              // Send response with length prefix
+              const responseLength = Buffer.allocUnsafe(2);
+              responseLength.writeUInt16BE(response.length, 0);
+              socket.write(Buffer.concat([responseLength, response]));
+            } catch (error) {
+              console.error(`Error handling TCP query:`, error);
+              const errorResponse = this.createDNSResponse(dnsMsg, true);
+              const errorLength = Buffer.allocUnsafe(2);
+              errorLength.writeUInt16BE(errorResponse.length, 0);
+              socket.write(Buffer.concat([errorLength, errorResponse]));
+            }
+          } else {
+            // Wait for more data
+            break;
+          }
+        }
+      });
+
+      socket.on('error', (err) => {
+        console.error('TCP connection error:', err);
+      });
+
+      socket.on('close', () => {
+        // Connection closed
+      });
+    });
+
+    this.tcpServer.on('error', (err) => {
+      console.error('TCP DNS server error:', err);
     });
 
     return new Promise<void>((resolve) => {
+      // Start UDP server
       this.server.bind(this.port, () => {
-        console.log(`🚀 DNS server running on port ${this.port}`);
-        resolve();
+        console.log(`🚀 DNS server (UDP) running on port ${this.port}`);
+
+        // Start TCP server on the same port
+        this.tcpServer.listen(this.port, () => {
+          console.log(`🚀 DNS server (TCP) running on port ${this.port}`);
+          resolve();
+        });
       });
     });
   }
 
   stop() {
     this.server.close();
+    this.tcpServer.close();
   }
 }
