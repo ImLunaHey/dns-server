@@ -65,8 +65,66 @@ app.on(['POST', 'GET'], '/api/auth/*', (c) => {
   return auth.handler(c.req.raw);
 });
 
+// Helper function to add EDNS(0) OPT record to DNS query
+function addEDNS0(query: Buffer, dnssecOK: boolean = false, udpPayloadSize: number = 4096): Buffer {
+  // Check if EDNS(0) already exists by looking for OPT record (type 41) in additional section
+  if (query.length < 12) return query;
+
+  const arCount = query.readUInt16BE(10);
+  if (arCount > 0) {
+    // EDNS(0) might already be present, check for it
+    let offset = 12;
+    // Skip question section
+    while (offset < query.length && query[offset] !== 0) {
+      const length = query[offset];
+      offset += length + 1;
+    }
+    if (offset < query.length) {
+      offset += 5; // Skip null terminator and QTYPE/QCLASS
+      // Check additional section for OPT record
+      for (let i = 0; i < arCount && offset < query.length; i++) {
+        if (query[offset] === 0) {
+          // Name is root (0)
+          const optType = query.readUInt16BE(offset + 1);
+          if (optType === 41) {
+            // OPT record already exists, update it
+            const newQuery = Buffer.from(query);
+            const optFlags = dnssecOK ? 0x8000 : 0x0000; // DO bit
+            newQuery.writeUInt16BE(optFlags, offset + 5); // Extended RCODE and flags
+            newQuery.writeUInt16BE(udpPayloadSize, offset + 7); // UDP payload size
+            return newQuery;
+          }
+        }
+        // Skip this record
+        offset += 2; // Name
+        const rrType = query.readUInt16BE(offset);
+        offset += 2; // Type
+        offset += 2; // Class
+        offset += 4; // TTL
+        const dataLength = query.readUInt16BE(offset);
+        offset += 2 + dataLength; // Data length + data
+      }
+    }
+  }
+
+  // Add EDNS(0) OPT record
+  const optRecord = Buffer.alloc(11);
+  optRecord[0] = 0; // Root domain name (0)
+  optRecord.writeUInt16BE(41, 1); // OPT type
+  optRecord.writeUInt16BE(udpPayloadSize, 3); // UDP payload size
+  optRecord.writeUInt16BE(dnssecOK ? 0x8000 : 0x0000, 5); // Extended RCODE and flags (DO bit)
+  optRecord.writeUInt16BE(0, 7); // RCODE
+  optRecord.writeUInt16BE(0, 9); // Data length
+
+  // Update additional count
+  const newQuery = Buffer.concat([query, optRecord]);
+  newQuery.writeUInt16BE(arCount + 1, 10);
+
+  return newQuery;
+}
+
 // Helper function to create DNS query from domain and type
-function createDNSQueryFromParams(domain: string, type: string): Buffer {
+function createDNSQueryFromParams(domain: string, type: string, dnssecOK: boolean = false): Buffer {
   const typeMap: Record<string, number> = {
     A: 1,
     AAAA: 28,
@@ -77,6 +135,12 @@ function createDNSQueryFromParams(domain: string, type: string): Buffer {
     SOA: 6,
     PTR: 12,
     SRV: 33,
+    RRSIG: 46,
+    DNSKEY: 48,
+    DS: 43,
+    NSEC: 47,
+    NSEC3: 50,
+    OPT: 41,
   };
 
   const queryType = typeMap[type.toUpperCase()] || 1;
@@ -106,7 +170,14 @@ function createDNSQueryFromParams(domain: string, type: string): Buffer {
   question.writeUInt16BE(queryType, 0); // QTYPE
   question.writeUInt16BE(1, 2); // QCLASS (IN = 1)
 
-  return Buffer.concat([header, domainBuffer.slice(0, offset), question]);
+  let query = Buffer.concat([header, domainBuffer.slice(0, offset), question]);
+
+  // Add EDNS(0) if DNSSEC is requested
+  if (dnssecOK) {
+    query = addEDNS0(query, true);
+  }
+
+  return query;
 }
 
 // Helper function to parse domain name from DNS response
@@ -218,6 +289,85 @@ function parseResourceRecord(
       txtOffset += txtLen + 1;
     }
     data = txtParts.join('');
+  } else if (rrType === 46) {
+    // RRSIG (DNSSEC signature)
+    if (dataLength >= 18) {
+      const typeCovered = response.readUInt16BE(currentOffset);
+      const algorithm = response[currentOffset + 2];
+      const labels = response[currentOffset + 3];
+      const originalTTL = response.readUInt32BE(currentOffset + 4);
+      const expiration = response.readUInt32BE(currentOffset + 8);
+      const inception = response.readUInt32BE(currentOffset + 12);
+      const keyTag = response.readUInt16BE(currentOffset + 16);
+      const signerName = parseDomainName(response, currentOffset + 18);
+      const signature = response.slice(signerName.newOffset, currentOffset + dataLength);
+      data = `${typeCovered} ${algorithm} ${labels} ${originalTTL} ${expiration} ${inception} ${keyTag} ${
+        signerName.name
+      } ${signature.toString('base64')}`;
+    } else {
+      data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
+    }
+  } else if (rrType === 48) {
+    // DNSKEY (DNSSEC public key)
+    if (dataLength >= 4) {
+      const flags = response.readUInt16BE(currentOffset);
+      const protocol = response[currentOffset + 2];
+      const algorithm = response[currentOffset + 3];
+      const publicKey = response.slice(currentOffset + 4, currentOffset + dataLength);
+      data = `${flags} ${protocol} ${algorithm} ${publicKey.toString('base64')}`;
+    } else {
+      data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
+    }
+  } else if (rrType === 43) {
+    // DS (Delegation Signer)
+    if (dataLength >= 4) {
+      const keyTag = response.readUInt16BE(currentOffset);
+      const algorithm = response[currentOffset + 2];
+      const digestType = response[currentOffset + 3];
+      const digest = response.slice(currentOffset + 4, currentOffset + dataLength);
+      data = `${keyTag} ${algorithm} ${digestType} ${digest.toString('hex')}`;
+    } else {
+      data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
+    }
+  } else if (rrType === 47) {
+    // NSEC (Next Secure)
+    const nextDomain = parseDomainName(response, currentOffset);
+    const typeBitMap = response.slice(nextDomain.newOffset, currentOffset + dataLength);
+    data = `${nextDomain.name} ${typeBitMap.toString('hex')}`;
+  } else if (rrType === 50) {
+    // NSEC3 (Next Secure v3)
+    if (dataLength >= 7) {
+      const hashAlgorithm = response[currentOffset];
+      const flags = response[currentOffset + 1];
+      const iterations = response.readUInt16BE(currentOffset + 2);
+      const saltLength = response[currentOffset + 4];
+      const salt = response.slice(currentOffset + 5, currentOffset + 5 + saltLength);
+      const hashLength = response[currentOffset + 5 + saltLength];
+      const nextHashedOwnerName = response.slice(
+        currentOffset + 5 + saltLength + 1,
+        currentOffset + 5 + saltLength + 1 + hashLength,
+      );
+      const typeBitMap = response.slice(currentOffset + 5 + saltLength + 1 + hashLength, currentOffset + dataLength);
+      data = `${hashAlgorithm} ${flags} ${iterations} ${saltLength} ${salt.toString(
+        'hex',
+      )} ${hashLength} ${nextHashedOwnerName.toString('base64')} ${typeBitMap.toString('hex')}`;
+    } else {
+      data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
+    }
+  } else if (rrType === 41) {
+    // OPT (EDNS(0))
+    if (dataLength >= 4) {
+      const udpPayloadSize = response.readUInt16BE(currentOffset);
+      const extendedRcode = response[currentOffset + 2];
+      const version = response[currentOffset + 3];
+      const flags = response.readUInt16BE(currentOffset + 4);
+      const dnssecOK = (flags & 0x8000) !== 0;
+      data = `UDP:${udpPayloadSize} EXTENDED-RCODE:${extendedRcode} VERSION:${version} FLAGS:${flags.toString(
+        16,
+      )} DO:${dnssecOK}`;
+    } else {
+      data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
+    }
   } else {
     // For other types, return hex
     data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
@@ -244,6 +394,12 @@ function parseDNSResponseToJSON(response: Buffer, domain: string, type: string):
     SOA: 6,
     PTR: 12,
     SRV: 33,
+    RRSIG: 46,
+    DNSKEY: 48,
+    DS: 43,
+    NSEC: 47,
+    NSEC3: 50,
+    OPT: 41,
   };
 
   if (response.length < 12) {
@@ -374,18 +530,16 @@ app.all('/dns-query', async (c) => {
         );
       }
 
-      dnsMessage = createDNSQueryFromParams(queryDomain, queryType);
+      // Determine if DNSSEC is requested
+      const wantsDNSSEC = doParam === '1' || doParam === 'true';
+      const disableValidation = cdParam === '1' || cdParam === 'true';
 
-      // Set DO bit if requested (DNSSEC)
-      if (doParam === '1' || doParam === 'true') {
-        const flags = dnsMessage.readUInt16BE(2);
-        dnsMessage.writeUInt16BE(flags | 0x8000, 2); // Set DO bit (EDNS(0) OPT pseudo-RR needed, but we'll set the flag)
-      }
+      dnsMessage = createDNSQueryFromParams(queryDomain, queryType, wantsDNSSEC);
 
-      // Set CD bit if requested (disable validation)
-      if (cdParam === '1' || cdParam === 'true') {
+      // Set CD bit if requested (disable validation) - this goes in the DNS header flags
+      if (disableValidation) {
         const flags = dnsMessage.readUInt16BE(2);
-        dnsMessage.writeUInt16BE(flags | 0x0010, 2); // Set CD bit
+        dnsMessage.writeUInt16BE(flags | 0x0010, 2); // Set CD bit (Checking Disabled)
       }
     } else if (c.req.method === 'POST') {
       // POST: DNS message in request body
