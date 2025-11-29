@@ -14,7 +14,8 @@ A custom DNS server built with TypeScript that blocks ads using popular blocklis
 - 🔐 **DNS-over-TLS (DoT)**: Encrypted DNS queries over TLS on port 853
 - 🌐 **TCP DNS**: Full TCP support for DNS queries (RFC 1035)
 - 🛡️ **Rate Limiting**: Protect against DNS amplification attacks
-- 💾 **DNS Caching**: In-memory caching for improved performance
+- 💾 **DNS Caching**: In-memory caching with TTL-based expiration (respects DNS response TTL)
+- 📊 **Health Monitoring**: Real-time server health status, uptime, and performance metrics
 - 🔐 **Privacy Mode**: Optional query logging for privacy
 - 🚧 **Block Page**: Redirect blocked domains to custom IP addresses
 
@@ -142,6 +143,21 @@ curl "http://localhost:3001/dns-query?name=example.com&type=A" \
 
 Configure via the Adlists page in the web UI, or add blocklist URLs directly.
 
+### DNS Caching
+
+The DNS server uses intelligent caching that respects TTL (Time To Live) values from DNS responses:
+
+- **TTL-Based Caching**: Automatically extracts and uses TTL values from DNS responses
+- **Fallback TTL**: Uses 300 seconds (5 minutes) if TTL extraction fails
+- **Cache Management**: Clear cache manually via Settings page or API endpoint
+- **Cache Statistics**: View cache size and cached query counts in the dashboard
+
+To clear the cache:
+
+1. Navigate to Settings → DNS Cache Settings
+2. Click "Clear Cache" button
+3. Cache will be cleared and statistics updated automatically
+
 ## Using the DNS Server
 
 ### Standard DNS (UDP/TCP)
@@ -231,10 +247,12 @@ Point your router's DNS settings to the IP address of the machine running this D
 
 - `GET /api/stats` - Get DNS server statistics
 - `GET /api/queries?limit=100` - Get recent DNS queries
+- `GET /api/health` - Get server health status and metrics
 - `POST /api/blocklist/add` - Add domain to blocklist
 - `POST /api/blocklist/remove` - Remove domain from blocklist
 - `GET /api/settings` - Get server settings
 - `PUT /api/settings` - Update server settings (DoT, DoH, caching, etc.)
+- `POST /api/cache/clear` - Clear DNS cache
 
 ## Dashboard Features
 
@@ -243,6 +261,7 @@ Point your router's DNS settings to the IP address of the machine running this D
 - Total queries processed
 - Number of blocked requests
 - Number of allowed requests
+- Number of cached queries (with percentage)
 - Blocklist size
 
 ### Top Domains Charts
@@ -253,8 +272,15 @@ Point your router's DNS settings to the IP address of the machine running this D
 ### Query Log
 
 - Real-time log of DNS queries
-- Shows domain, type, status, and response time
+- Shows domain, type, status, cached status, and response time
 - Quick block/allow buttons for each domain
+
+### Health Monitoring
+
+- Dedicated health page with server status
+- Real-time uptime tracking
+- Query rate and error rate monitoring
+- Individual server status (UDP, TCP, DoT, DoH)
 
 ## Development
 
@@ -342,7 +368,9 @@ If DoH queries fail:
 - Handles thousands of queries per second
 - Low memory footprint (~50MB)
 - Efficient blocklist lookup using Set data structure
-- Keeps last 1000 queries in memory
+- TTL-based caching reduces upstream DNS queries
+- Tracks cached vs non-cached queries for performance analysis
+- Real-time health monitoring and metrics
 
 ## License
 
