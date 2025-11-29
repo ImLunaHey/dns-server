@@ -612,4 +612,184 @@ export const api = {
     }
     return response.json();
   },
+
+  // Authoritative DNS Zones
+  async getZones(): Promise<Array<{
+    id: number;
+    domain: string;
+    enabled: number;
+    soa_serial: number;
+    soa_refresh: number;
+    soa_retry: number;
+    soa_expire: number;
+    soa_minimum: number;
+    soa_mname: string;
+    soa_rname: string;
+    createdAt: number;
+    updatedAt: number;
+  }>> {
+    const response = await fetch(`${API_URL}/api/zones`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to fetch zones");
+    }
+    return response.json();
+  },
+
+  async createZone(domain: string, soaMname: string, soaRname: string): Promise<{
+    id: number;
+    domain: string;
+    enabled: number;
+    soa_serial: number;
+    soa_refresh: number;
+    soa_retry: number;
+    soa_expire: number;
+    soa_minimum: number;
+    soa_mname: string;
+    soa_rname: string;
+    createdAt: number;
+    updatedAt: number;
+  }> {
+    const response = await fetch(`${API_URL}/api/zones`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain, soaMname, soaRname }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to create zone");
+    }
+    return response.json();
+  },
+
+  async updateZone(id: number, updates: {
+    domain?: string;
+    enabled?: boolean;
+    soa_serial?: number;
+    soa_refresh?: number;
+    soa_retry?: number;
+    soa_expire?: number;
+    soa_minimum?: number;
+    soa_mname?: string;
+    soa_rname?: string;
+  }): Promise<{
+    id: number;
+    domain: string;
+    enabled: number;
+    soa_serial: number;
+    soa_refresh: number;
+    soa_retry: number;
+    soa_expire: number;
+    soa_minimum: number;
+    soa_mname: string;
+    soa_rname: string;
+    createdAt: number;
+    updatedAt: number;
+  }> {
+    const response = await fetch(`${API_URL}/api/zones/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to update zone");
+    }
+    return response.json();
+  },
+
+  async deleteZone(id: number): Promise<void> {
+    const response = await fetch(`${API_URL}/api/zones/${id}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to delete zone");
+    }
+  },
+
+  async getZoneRecords(zoneId: number): Promise<Array<{
+    id: number;
+    zone_id: number;
+    name: string;
+    type: string;
+    ttl: number;
+    data: string;
+    priority: number | null;
+    enabled: number;
+    createdAt: number;
+    updatedAt: number;
+  }>> {
+    const response = await fetch(`${API_URL}/api/zones/${zoneId}/records`);
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to fetch zone records");
+    }
+    return response.json();
+  },
+
+  async createZoneRecord(zoneId: number, name: string, type: string, ttl: number, data: string, priority?: number): Promise<{
+    id: number;
+    zone_id: number;
+    name: string;
+    type: string;
+    ttl: number;
+    data: string;
+    priority: number | null;
+    enabled: number;
+    createdAt: number;
+    updatedAt: number;
+  }> {
+    const response = await fetch(`${API_URL}/api/zones/${zoneId}/records`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, type, ttl, data, priority }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to create zone record");
+    }
+    return response.json();
+  },
+
+  async updateZoneRecord(id: number, updates: {
+    name?: string;
+    type?: string;
+    ttl?: number;
+    data?: string;
+    priority?: number | null;
+    enabled?: boolean;
+  }): Promise<{
+    id: number;
+    zone_id: number;
+    name: string;
+    type: string;
+    ttl: number;
+    data: string;
+    priority: number | null;
+    enabled: number;
+    createdAt: number;
+    updatedAt: number;
+  }> {
+    const response = await fetch(`${API_URL}/api/zones/records/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to update zone record");
+    }
+    return response.json();
+  },
+
+  async deleteZoneRecord(id: number): Promise<void> {
+    const response = await fetch(`${API_URL}/api/zones/records/${id}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to delete zone record");
+    }
+  },
 };

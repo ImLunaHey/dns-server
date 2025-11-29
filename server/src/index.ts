@@ -25,6 +25,8 @@ import {
   dbRateLimits,
   dbScheduledTasks,
   dbBlockPageSettings,
+  dbZones,
+  dbZoneRecords,
 } from './db.js';
 import db from './db.js';
 import { auth } from './auth.js';
@@ -1829,6 +1831,114 @@ app.get('/api/tools/lookup', async (c) => {
   } catch (error) {
     return c.json({ error: (error as Error).message }, 400);
   }
+});
+
+// Authoritative DNS Zones
+app.get('/api/zones', requireAuth, (c) => {
+  const zones = dbZones.getAll();
+  return c.json(zones);
+});
+
+app.post('/api/zones', requireAuth, async (c) => {
+  try {
+    const { domain, soaMname, soaRname } = await c.req.json();
+
+    if (!domain || !soaMname || !soaRname) {
+      return c.json({ error: 'domain, soaMname, and soaRname are required' }, 400);
+    }
+
+    const zoneId = dbZones.create(domain, soaMname, soaRname);
+    const zone = dbZones.getById(zoneId);
+    return c.json(zone, 201);
+  } catch (error) {
+    logger.error('Error creating zone', error instanceof Error ? error : new Error(String(error)));
+    return c.json({ error: (error as Error).message }, 400);
+  }
+});
+
+app.get('/api/zones/:id', requireAuth, (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  const zone = dbZones.getById(id);
+  if (!zone) {
+    return c.json({ error: 'Zone not found' }, 404);
+  }
+  return c.json(zone);
+});
+
+app.put('/api/zones/:id', requireAuth, async (c) => {
+  try {
+    const id = parseInt(c.req.param('id'), 10);
+    const updates = await c.req.json();
+    dbZones.update(id, updates);
+    const zone = dbZones.getById(id);
+    if (!zone) {
+      return c.json({ error: 'Zone not found' }, 404);
+    }
+    return c.json(zone);
+  } catch (error) {
+    logger.error('Error updating zone', error instanceof Error ? error : new Error(String(error)));
+    return c.json({ error: (error as Error).message }, 400);
+  }
+});
+
+app.delete('/api/zones/:id', requireAuth, (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  dbZones.delete(id);
+  return c.json({ success: true });
+});
+
+app.get('/api/zones/:id/records', requireAuth, (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  const records = dbZoneRecords.getByZone(id);
+  return c.json(records);
+});
+
+app.post('/api/zones/:id/records', requireAuth, async (c) => {
+  try {
+    const zoneId = parseInt(c.req.param('id'), 10);
+    const { name, type, ttl, data, priority } = await c.req.json();
+
+    if (!name || !type || !ttl || !data) {
+      return c.json({ error: 'name, type, ttl, and data are required' }, 400);
+    }
+
+    const recordId = dbZoneRecords.create(zoneId, name, type, ttl, data, priority);
+    dbZones.incrementSerial(zoneId);
+    const record = dbZoneRecords.getById(recordId);
+    return c.json(record, 201);
+  } catch (error) {
+    logger.error('Error creating zone record', error instanceof Error ? error : new Error(String(error)));
+    return c.json({ error: (error as Error).message }, 400);
+  }
+});
+
+app.put('/api/zones/records/:id', requireAuth, async (c) => {
+  try {
+    const id = parseInt(c.req.param('id'), 10);
+    const updates = await c.req.json();
+    const record = dbZoneRecords.getById(id);
+    if (!record) {
+      return c.json({ error: 'Record not found' }, 404);
+    }
+    dbZoneRecords.update(id, updates);
+    dbZones.incrementSerial(record.zone_id);
+    const updatedRecord = dbZoneRecords.getById(id);
+    return c.json(updatedRecord);
+  } catch (error) {
+    logger.error('Error updating zone record', error instanceof Error ? error : new Error(String(error)));
+    return c.json({ error: (error as Error).message }, 400);
+  }
+});
+
+app.delete('/api/zones/records/:id', requireAuth, (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  const record = dbZoneRecords.getById(id);
+  if (!record) {
+    return c.json({ error: 'Record not found' }, 404);
+  }
+  dbZoneRecords.delete(id);
+  dbZones.incrementSerial(record.zone_id);
+  return c.json({ success: true });
 });
 
 // Teleporter (Import/Export)

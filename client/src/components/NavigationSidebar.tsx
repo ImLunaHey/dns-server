@@ -22,6 +22,7 @@ const navigation = [
   { name: "Adlists", href: "/adlists", icon: "🚫" },
   { name: "Disable Blocking", href: "/disable", icon: "⏸️" },
   { name: "Local DNS", href: "/local-dns", icon: "🏠" },
+  { name: "Zones", href: "/zones", icon: "🌍" },
   { name: "Tools", href: "/tools", icon: "🔧" },
   { name: "Settings", href: "/settings", icon: "⚙️" },
   { name: "Block Page", href: "/block-page-settings", icon: "🚫" },

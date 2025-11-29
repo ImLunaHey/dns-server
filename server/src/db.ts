@@ -206,6 +206,41 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_blocked ON queries(blocked);
   CREATE INDEX IF NOT EXISTS idx_cache_expires ON dns_cache(expiresAt);
 
+  -- Authoritative DNS zones
+  CREATE TABLE IF NOT EXISTS zones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    soa_serial INTEGER NOT NULL DEFAULT 1,
+    soa_refresh INTEGER NOT NULL DEFAULT 3600,
+    soa_retry INTEGER NOT NULL DEFAULT 600,
+    soa_expire INTEGER NOT NULL DEFAULT 86400,
+    soa_minimum INTEGER NOT NULL DEFAULT 3600,
+    soa_mname TEXT NOT NULL,
+    soa_rname TEXT NOT NULL,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS zone_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    zone_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL,
+    ttl INTEGER NOT NULL DEFAULT 3600,
+    data TEXT NOT NULL,
+    priority INTEGER,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    FOREIGN KEY (zone_id) REFERENCES zones(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_zones_domain ON zones(domain);
+  CREATE INDEX IF NOT EXISTS idx_zone_records_zone_id ON zone_records(zone_id);
+  CREATE INDEX IF NOT EXISTS idx_zone_records_name ON zone_records(name);
+  CREATE INDEX IF NOT EXISTS idx_zone_records_type ON zone_records(type);
+
   -- Better-auth tables
   CREATE TABLE IF NOT EXISTS "user" (
     "id" text not null primary key,
@@ -2144,6 +2179,319 @@ export const dbManualBlocklist = {
     const stmt = db.prepare('SELECT domain FROM manual_blocklist');
     const rows = stmt.all() as Array<{ domain: string }>;
     return new Set(rows.map((row) => row.domain));
+  },
+};
+
+export const dbZones = {
+  create(domain: string, soaMname: string, soaRname: string) {
+    const now = Date.now();
+    const stmt = db.prepare(`
+      INSERT INTO zones (domain, soa_mname, soa_rname, soa_serial, soa_refresh, soa_retry, soa_expire, soa_minimum, createdAt, updatedAt)
+      VALUES (?, ?, ?, 1, 3600, 600, 86400, 3600, ?, ?)
+    `);
+    const result = stmt.run(domain.toLowerCase(), soaMname, soaRname, now, now);
+    return result.lastInsertRowid as number;
+  },
+
+  getAll(): Array<{
+    id: number;
+    domain: string;
+    enabled: number;
+    soa_serial: number;
+    soa_refresh: number;
+    soa_retry: number;
+    soa_expire: number;
+    soa_minimum: number;
+    soa_mname: string;
+    soa_rname: string;
+    createdAt: number;
+    updatedAt: number;
+  }> {
+    const stmt = db.prepare(`
+      SELECT id, domain, enabled, soa_serial, soa_refresh, soa_retry, soa_expire, soa_minimum, 
+             soa_mname, soa_rname, createdAt, updatedAt 
+      FROM zones 
+      ORDER BY domain
+    `);
+    return stmt.all() as Array<{
+      id: number;
+      domain: string;
+      enabled: number;
+      soa_serial: number;
+      soa_refresh: number;
+      soa_retry: number;
+      soa_expire: number;
+      soa_minimum: number;
+      soa_mname: string;
+      soa_rname: string;
+      createdAt: number;
+      updatedAt: number;
+    }>;
+  },
+
+  getById(id: number) {
+    const stmt = db.prepare(`
+      SELECT id, domain, enabled, soa_serial, soa_refresh, soa_retry, soa_expire, soa_minimum, 
+             soa_mname, soa_rname, createdAt, updatedAt 
+      FROM zones 
+      WHERE id = ?
+    `);
+    return stmt.get(id) as {
+      id: number;
+      domain: string;
+      enabled: number;
+      soa_serial: number;
+      soa_refresh: number;
+      soa_retry: number;
+      soa_expire: number;
+      soa_minimum: number;
+      soa_mname: string;
+      soa_rname: string;
+      createdAt: number;
+      updatedAt: number;
+    } | undefined;
+  },
+
+  getByDomain(domain: string) {
+    const stmt = db.prepare(`
+      SELECT id, domain, enabled, soa_serial, soa_refresh, soa_retry, soa_expire, soa_minimum, 
+             soa_mname, soa_rname, createdAt, updatedAt 
+      FROM zones 
+      WHERE domain = ? AND enabled = 1
+    `);
+    return stmt.get(domain.toLowerCase()) as {
+      id: number;
+      domain: string;
+      enabled: number;
+      soa_serial: number;
+      soa_refresh: number;
+      soa_retry: number;
+      soa_expire: number;
+      soa_minimum: number;
+      soa_mname: string;
+      soa_rname: string;
+      createdAt: number;
+      updatedAt: number;
+    } | undefined;
+  },
+
+  findZoneForDomain(domain: string) {
+    // Find the most specific zone that matches the domain
+    // e.g., for "sub.example.com", check "sub.example.com", "example.com", "com"
+    const parts = domain.toLowerCase().split('.');
+    for (let i = 0; i < parts.length; i++) {
+      const zoneDomain = parts.slice(i).join('.');
+      const zone = this.getByDomain(zoneDomain);
+      if (zone) {
+        return zone;
+      }
+    }
+    return undefined;
+  },
+
+  update(id: number, updates: {
+    domain?: string;
+    enabled?: boolean;
+    soa_serial?: number;
+    soa_refresh?: number;
+    soa_retry?: number;
+    soa_expire?: number;
+    soa_minimum?: number;
+    soa_mname?: string;
+    soa_rname?: string;
+  }) {
+    const now = Date.now();
+    const fields: string[] = [];
+    const values: unknown[] = [];
+
+    if (updates.domain !== undefined) {
+      fields.push('domain = ?');
+      values.push(updates.domain.toLowerCase());
+    }
+    if (updates.enabled !== undefined) {
+      fields.push('enabled = ?');
+      values.push(updates.enabled ? 1 : 0);
+    }
+    if (updates.soa_serial !== undefined) {
+      fields.push('soa_serial = ?');
+      values.push(updates.soa_serial);
+    }
+    if (updates.soa_refresh !== undefined) {
+      fields.push('soa_refresh = ?');
+      values.push(updates.soa_refresh);
+    }
+    if (updates.soa_retry !== undefined) {
+      fields.push('soa_retry = ?');
+      values.push(updates.soa_retry);
+    }
+    if (updates.soa_expire !== undefined) {
+      fields.push('soa_expire = ?');
+      values.push(updates.soa_expire);
+    }
+    if (updates.soa_minimum !== undefined) {
+      fields.push('soa_minimum = ?');
+      values.push(updates.soa_minimum);
+    }
+    if (updates.soa_mname !== undefined) {
+      fields.push('soa_mname = ?');
+      values.push(updates.soa_mname);
+    }
+    if (updates.soa_rname !== undefined) {
+      fields.push('soa_rname = ?');
+      values.push(updates.soa_rname);
+    }
+
+    if (fields.length === 0) return;
+
+    fields.push('updatedAt = ?');
+    values.push(now);
+    values.push(id);
+
+    const stmt = db.prepare(`UPDATE zones SET ${fields.join(', ')} WHERE id = ?`);
+    stmt.run(...values);
+  },
+
+  delete(id: number) {
+    const stmt = db.prepare('DELETE FROM zones WHERE id = ?');
+    stmt.run(id);
+  },
+
+  incrementSerial(id: number) {
+    const stmt = db.prepare('UPDATE zones SET soa_serial = soa_serial + 1, updatedAt = ? WHERE id = ?');
+    stmt.run(Date.now(), id);
+  },
+};
+
+export const dbZoneRecords = {
+  create(zoneId: number, name: string, type: string, ttl: number, data: string, priority?: number) {
+    const now = Date.now();
+    const stmt = db.prepare(`
+      INSERT INTO zone_records (zone_id, name, type, ttl, data, priority, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const result = stmt.run(zoneId, name.toLowerCase(), type.toUpperCase(), ttl, data, priority ?? null, now, now);
+    return result.lastInsertRowid as number;
+  },
+
+  getByZone(zoneId: number) {
+    const stmt = db.prepare('SELECT * FROM zone_records WHERE zone_id = ? AND enabled = 1 ORDER BY name, type');
+    return stmt.all(zoneId) as Array<{
+      id: number;
+      zone_id: number;
+      name: string;
+      type: string;
+      ttl: number;
+      data: string;
+      priority: number | null;
+      enabled: number;
+      createdAt: number;
+      updatedAt: number;
+    }>;
+  },
+
+  getByZoneAndName(zoneId: number, name: string) {
+    const stmt = db.prepare('SELECT * FROM zone_records WHERE zone_id = ? AND name = ? AND enabled = 1');
+    return stmt.all(zoneId, name.toLowerCase()) as Array<{
+      id: number;
+      zone_id: number;
+      name: string;
+      type: string;
+      ttl: number;
+      data: string;
+      priority: number | null;
+      enabled: number;
+      createdAt: number;
+      updatedAt: number;
+    }>;
+  },
+
+  getByZoneNameAndType(zoneId: number, name: string, type: string) {
+    const stmt = db.prepare('SELECT * FROM zone_records WHERE zone_id = ? AND name = ? AND type = ? AND enabled = 1');
+    return stmt.all(zoneId, name.toLowerCase(), type.toUpperCase()) as Array<{
+      id: number;
+      zone_id: number;
+      name: string;
+      type: string;
+      ttl: number;
+      data: string;
+      priority: number | null;
+      enabled: number;
+      createdAt: number;
+      updatedAt: number;
+    }>;
+  },
+
+  getById(id: number) {
+    const stmt = db.prepare('SELECT * FROM zone_records WHERE id = ?');
+    return stmt.get(id) as {
+      id: number;
+      zone_id: number;
+      name: string;
+      type: string;
+      ttl: number;
+      data: string;
+      priority: number | null;
+      enabled: number;
+      createdAt: number;
+      updatedAt: number;
+    } | undefined;
+  },
+
+  update(id: number, updates: {
+    name?: string;
+    type?: string;
+    ttl?: number;
+    data?: string;
+    priority?: number | null;
+    enabled?: boolean;
+  }) {
+    const now = Date.now();
+    const fields: string[] = [];
+    const values: unknown[] = [];
+
+    if (updates.name !== undefined) {
+      fields.push('name = ?');
+      values.push(updates.name.toLowerCase());
+    }
+    if (updates.type !== undefined) {
+      fields.push('type = ?');
+      values.push(updates.type.toUpperCase());
+    }
+    if (updates.ttl !== undefined) {
+      fields.push('ttl = ?');
+      values.push(updates.ttl);
+    }
+    if (updates.data !== undefined) {
+      fields.push('data = ?');
+      values.push(updates.data);
+    }
+    if (updates.priority !== undefined) {
+      fields.push('priority = ?');
+      values.push(updates.priority);
+    }
+    if (updates.enabled !== undefined) {
+      fields.push('enabled = ?');
+      values.push(updates.enabled ? 1 : 0);
+    }
+
+    if (fields.length === 0) return;
+
+    fields.push('updatedAt = ?');
+    values.push(now);
+    values.push(id);
+
+    const stmt = db.prepare(`UPDATE zone_records SET ${fields.join(', ')} WHERE id = ?`);
+    stmt.run(...values);
+  },
+
+  delete(id: number) {
+    const stmt = db.prepare('DELETE FROM zone_records WHERE id = ?');
+    stmt.run(id);
+  },
+
+  deleteByZone(zoneId: number) {
+    const stmt = db.prepare('DELETE FROM zone_records WHERE zone_id = ?');
+    stmt.run(zoneId);
   },
 };
 

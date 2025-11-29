@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as ZonesRouteImport } from './routes/zones'
 import { Route as UiComponentsRouteImport } from './routes/ui-components'
 import { Route as ToolsRouteImport } from './routes/tools'
 import { Route as SetupRouteImport } from './routes/setup'
@@ -30,6 +31,11 @@ import { Route as AdlistsRouteImport } from './routes/adlists'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ClientsClientIpStatsRouteImport } from './routes/clients.$clientIp.stats'
 
+const ZonesRoute = ZonesRouteImport.update({
+  id: '/zones',
+  path: '/zones',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const UiComponentsRoute = UiComponentsRouteImport.update({
   id: '/ui-components',
   path: '/ui-components',
@@ -151,6 +157,7 @@ export interface FileRoutesByFullPath {
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
   '/ui-components': typeof UiComponentsRoute
+  '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
 }
 export interface FileRoutesByTo {
@@ -173,6 +180,7 @@ export interface FileRoutesByTo {
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
   '/ui-components': typeof UiComponentsRoute
+  '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
 }
 export interface FileRoutesById {
@@ -196,6 +204,7 @@ export interface FileRoutesById {
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
   '/ui-components': typeof UiComponentsRoute
+  '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
 }
 export interface FileRouteTypes {
@@ -220,6 +229,7 @@ export interface FileRouteTypes {
     | '/setup'
     | '/tools'
     | '/ui-components'
+    | '/zones'
     | '/clients/$clientIp/stats'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -242,6 +252,7 @@ export interface FileRouteTypes {
     | '/setup'
     | '/tools'
     | '/ui-components'
+    | '/zones'
     | '/clients/$clientIp/stats'
   id:
     | '__root__'
@@ -264,6 +275,7 @@ export interface FileRouteTypes {
     | '/setup'
     | '/tools'
     | '/ui-components'
+    | '/zones'
     | '/clients/$clientIp/stats'
   fileRoutesById: FileRoutesById
 }
@@ -287,10 +299,18 @@ export interface RootRouteChildren {
   SetupRoute: typeof SetupRoute
   ToolsRoute: typeof ToolsRoute
   UiComponentsRoute: typeof UiComponentsRoute
+  ZonesRoute: typeof ZonesRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/zones': {
+      id: '/zones'
+      path: '/zones'
+      fullPath: '/zones'
+      preLoaderRoute: typeof ZonesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ui-components': {
       id: '/ui-components'
       path: '/ui-components'
@@ -465,6 +485,7 @@ const rootRouteChildren: RootRouteChildren = {
   SetupRoute: SetupRoute,
   ToolsRoute: ToolsRoute,
   UiComponentsRoute: UiComponentsRoute,
+  ZonesRoute: ZonesRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

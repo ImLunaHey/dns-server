@@ -21,6 +21,8 @@ import {
   dbClientUpstreamDNS,
   dbRateLimits,
   dbCache,
+  dbZones,
+  dbZoneRecords,
 } from './db.js';
 import { logger } from './logger.js';
 
@@ -636,6 +638,254 @@ export class DNSServer {
     return response.slice(0, offset + ipBytes.length);
   }
 
+  private handleAuthoritativeQuery(
+    queryMsg: Buffer,
+    domain: string,
+    queryType: number,
+    zone: { id: number; domain: string; soa_serial: number; soa_refresh: number; soa_retry: number; soa_expire: number; soa_minimum: number; soa_mname: string; soa_rname: string },
+  ): Buffer | null {
+    const zoneRecords = dbZoneRecords.getByZone(zone.id);
+    const domainLower = domain.toLowerCase();
+    const zoneDomainLower = zone.domain.toLowerCase();
+
+    // Find records matching the query
+    // Check exact match first, then check if it's a subdomain of the zone
+    let matchingRecords = zoneRecords.filter((record) => {
+      const recordName = record.name.toLowerCase();
+      // Exact match
+      if (recordName === domainLower) return true;
+      // Subdomain match (e.g., record "www" matches "www.example.com" when zone is "example.com")
+      if (recordName === '@' && domainLower === zoneDomainLower) return true;
+      // Relative name match (e.g., record "www" in zone "example.com" matches "www.example.com")
+      if (domainLower.endsWith('.' + zoneDomainLower) || domainLower === zoneDomainLower) {
+        const relativeName = domainLower === zoneDomainLower ? '@' : domainLower.slice(0, -(zoneDomainLower.length + 1));
+        return recordName === relativeName || recordName === '@';
+      }
+      return false;
+    });
+
+    // Filter by query type (or CNAME if exists)
+    const typeMap: Record<string, number> = {
+      A: 1,
+      AAAA: 28,
+      MX: 15,
+      TXT: 16,
+      NS: 2,
+      CNAME: 5,
+      SOA: 6,
+      PTR: 12,
+      SRV: 33,
+    };
+
+    const typeName = Object.keys(typeMap).find((k) => typeMap[k] === queryType) || 'A';
+    let answers = matchingRecords.filter((r) => r.type === typeName);
+
+    // If no direct match, check for CNAME
+    if (answers.length === 0) {
+      const cnameRecords = matchingRecords.filter((r) => r.type === 'CNAME');
+      if (cnameRecords.length > 0) {
+        answers = cnameRecords;
+      }
+    }
+
+    // Build response (allocate enough space)
+    const response = Buffer.alloc(4096);
+    queryMsg.copy(response, 0, 0, 12);
+
+    // Set QR bit (response), AA bit (authoritative), and RA bit
+    const flags = response.readUInt16BE(2);
+    response.writeUInt16BE(flags | 0x8580, 2);
+
+    let offset = 12;
+    // Copy question section (handle compression pointers)
+    while (offset < queryMsg.length) {
+      const byte = queryMsg[offset];
+      if (byte === 0) {
+        // Null terminator
+        response[offset] = 0;
+        offset++;
+        break;
+      }
+      if ((byte & 0xc0) === 0xc0) {
+        // Compression pointer (2 bytes)
+        response.writeUInt16BE(queryMsg.readUInt16BE(offset), offset);
+        offset += 2;
+        break;
+      }
+      // Regular label
+      const length = byte;
+      response[offset] = length;
+      queryMsg.copy(response, offset + 1, offset + 1, offset + 1 + length);
+      offset += length + 1;
+    }
+    // Copy QTYPE and QCLASS
+    response.writeUInt16BE(queryMsg.readUInt16BE(offset), offset);
+    response.writeUInt16BE(queryMsg.readUInt16BE(offset + 2), offset + 2);
+    const questionEnd = offset + 4;
+
+    let answerCount = 0;
+    let authorityCount = 0;
+
+    // Add answers
+    // Question name starts at offset 12 (after header)
+    const questionNameStart = 12;
+    if (answers.length > 0) {
+      for (const record of answers) {
+        logger.debug('Adding answer record', { offset, questionNameStart, type: record.type, domain });
+        offset = this.addResourceRecord(response, offset, questionNameStart, domain, record.type, record.ttl, record.data, record.priority);
+        answerCount++;
+      }
+    } else {
+      // NXDOMAIN - no records found, include SOA in authority section
+      response.writeUInt16BE(flags | 0x8583, 2); // Set NXDOMAIN (RCODE = 3)
+      const soaData = `${zone.soa_mname} ${zone.soa_rname} ${zone.soa_serial} ${zone.soa_refresh} ${zone.soa_retry} ${zone.soa_expire} ${zone.soa_minimum}`;
+      offset = this.addResourceRecord(response, questionEnd, questionNameStart, zone.domain, 'SOA', zone.soa_minimum, soaData);
+      authorityCount = 1;
+    }
+
+    // Update counts
+    response.writeUInt16BE(answerCount, 6);
+    response.writeUInt16BE(authorityCount, 8);
+    response.writeUInt16BE(0, 10); // Additional count
+
+    return response.slice(0, offset);
+  }
+
+  private addResourceRecord(
+    response: Buffer,
+    offset: number,
+    questionNameStart: number,
+    name: string,
+    type: string,
+    ttl: number,
+    data: string,
+    priority?: number | null,
+  ): number {
+    // Use compression pointer to point to the question name
+    // Compression pointer format: 11xxxxxx xxxxxxxx (first 2 bits = 11, remaining 14 bits = offset)
+    // Must point to a valid location in the message (0-16383)
+    // Question name always starts at offset 12 (after 12-byte header)
+    if (questionNameStart >= 0 && questionNameStart < 16384) {
+      const pointer = 0xc000 | questionNameStart;
+      logger.debug('Writing compression pointer', { offset, pointer: pointer.toString(16), questionNameStart });
+      response.writeUInt16BE(pointer, offset);
+      offset += 2;
+    } else {
+      // Fallback: encode the name directly (shouldn't happen for normal queries)
+      const nameBytes = this.domainToBytes(name);
+      if (offset + nameBytes.length > response.length) {
+        throw new Error('Response buffer too small');
+      }
+      nameBytes.copy(response, offset);
+      offset += nameBytes.length;
+    }
+
+    // Type
+    const typeMap: Record<string, number> = {
+      A: 1,
+      AAAA: 28,
+      MX: 15,
+      TXT: 16,
+      NS: 2,
+      CNAME: 5,
+      SOA: 6,
+      PTR: 12,
+      SRV: 33,
+    };
+    response.writeUInt16BE(typeMap[type.toUpperCase()] || 1, offset);
+    offset += 2;
+
+    // Class (IN = 1)
+    response.writeUInt16BE(1, offset);
+    offset += 2;
+
+    // TTL
+    response.writeUInt32BE(ttl, offset);
+    offset += 4;
+
+    // Data length and data
+    let dataBytes: Buffer;
+    if (type === 'A') {
+      dataBytes = this.ipv4ToBytes(data);
+    } else if (type === 'AAAA') {
+      dataBytes = this.ipv6ToBytes(data);
+    } else if (type === 'MX') {
+      const parts = data.split(' ');
+      const mxPriority = priority ?? parseInt(parts[0], 10);
+      const mxDomain = parts.length > 1 ? parts.slice(1).join(' ') : parts[0];
+      const domainBytes = this.domainToBytes(mxDomain);
+      dataBytes = Buffer.concat([Buffer.from([(mxPriority >> 8) & 0xff, mxPriority & 0xff]), domainBytes]);
+    } else if (type === 'TXT') {
+      const txtData = Buffer.from(data, 'utf8');
+      dataBytes = Buffer.concat([Buffer.from([txtData.length]), txtData]);
+    } else if (type === 'NS' || type === 'CNAME') {
+      dataBytes = this.domainToBytes(data);
+    } else if (type === 'SOA') {
+      const parts = data.split(' ');
+      if (parts.length >= 7) {
+        const mname = this.domainToBytes(parts[0]);
+        const rname = this.domainToBytes(parts[1]);
+        const serial = parseInt(parts[2], 10);
+        const refresh = parseInt(parts[3], 10);
+        const retry = parseInt(parts[4], 10);
+        const expire = parseInt(parts[5], 10);
+        const minimum = parseInt(parts[6], 10);
+        dataBytes = Buffer.concat([
+          mname,
+          rname,
+          Buffer.from([
+            (serial >> 24) & 0xff,
+            (serial >> 16) & 0xff,
+            (serial >> 8) & 0xff,
+            serial & 0xff,
+            (refresh >> 24) & 0xff,
+            (refresh >> 16) & 0xff,
+            (refresh >> 8) & 0xff,
+            refresh & 0xff,
+            (retry >> 24) & 0xff,
+            (retry >> 16) & 0xff,
+            (retry >> 8) & 0xff,
+            retry & 0xff,
+            (expire >> 24) & 0xff,
+            (expire >> 16) & 0xff,
+            (expire >> 8) & 0xff,
+            expire & 0xff,
+            (minimum >> 24) & 0xff,
+            (minimum >> 16) & 0xff,
+            (minimum >> 8) & 0xff,
+            minimum & 0xff,
+          ]),
+        ]);
+      } else {
+        dataBytes = Buffer.from(data, 'utf8');
+      }
+    } else {
+      dataBytes = Buffer.from(data, 'utf8');
+    }
+
+    response.writeUInt16BE(dataBytes.length, offset);
+    offset += 2;
+    dataBytes.copy(response, offset);
+    offset += dataBytes.length;
+
+    return offset;
+  }
+
+  private domainToBytes(domain: string): Buffer {
+    if (!domain.endsWith('.')) {
+      domain += '.';
+    }
+    const parts = domain.split('.');
+    const buffers: Buffer[] = [];
+    for (const part of parts) {
+      if (part === '') continue;
+      buffers.push(Buffer.from([part.length]));
+      buffers.push(Buffer.from(part, 'utf8'));
+    }
+    buffers.push(Buffer.from([0])); // Null terminator
+    return Buffer.concat(buffers);
+  }
+
   private ipv4ToBytes(ip: string): Buffer {
     const parts = ip.split('.').map(Number);
     return Buffer.from(parts);
@@ -1032,6 +1282,28 @@ export class DNSServer {
         // Rate limited - return NXDOMAIN
         logger.warn('Rate limited', { clientIp });
         return this.createDNSResponse(msg, true);
+      }
+    }
+
+    // Check authoritative zones first
+    const zone = dbZones.findZoneForDomain(domain);
+    if (zone) {
+      logger.debug('Authoritative zone found', { domain, zone: zone.domain, queryType: type });
+      const authResponse = this.handleAuthoritativeQuery(msg, domain, type, zone);
+      if (authResponse) {
+        const queryId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const query: DNSQuery = {
+          id: queryId,
+          domain,
+          type: type === 1 ? 'A' : type === 28 ? 'AAAA' : `TYPE${type}`,
+          blocked: false,
+          timestamp: Date.now(),
+          clientIp,
+          responseTime: Date.now() - startTime,
+        };
+        this.addQuery(query);
+        logger.debug('Authoritative response', { domain, type, zone: zone.domain });
+        return authResponse;
       }
     }
 
