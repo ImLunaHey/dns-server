@@ -1775,9 +1775,18 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
   }
 });
 
-// Health check
+// Health check endpoints
 app.get('/health', (c) => {
-  return c.json({ status: 'ok' });
+  const health = dnsServer.getHealth();
+  const statusCode = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
+  return c.json(health, statusCode);
+});
+
+app.get('/api/health', (c) => {
+  const health = dnsServer.getHealth();
+  // Always return 200 for /api/health - let the status field indicate health
+  // This allows the UI to always get health data even if status is degraded/unhealthy
+  return c.json(health, 200);
 });
 
 async function runScheduledTasks() {

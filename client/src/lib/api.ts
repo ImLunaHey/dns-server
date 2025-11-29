@@ -18,6 +18,22 @@ export interface DNSQuery {
   blockReason?: string;
 }
 
+export interface ServerHealth {
+  status: "healthy" | "degraded" | "unhealthy";
+  startTime: string; // ISO timestamp
+  queryCount: number;
+  errorCount: number;
+  errorRate: number;
+  queriesPerSecond: number;
+  lastQueryTime: string | null; // ISO timestamp
+  servers: {
+    udp: boolean;
+    tcp: boolean;
+    dot: boolean;
+    doh: boolean;
+  };
+}
+
 export interface DNSStats {
   totalQueries: number;
   blockedQueries: number;
@@ -44,6 +60,14 @@ export interface DNSStats {
 export const api = {
   async getStats(): Promise<DNSStats> {
     const response = await fetch(`${API_URL}/api/stats`);
+    return response.json();
+  },
+
+  async getHealth(): Promise<ServerHealth> {
+    const response = await fetch(`${API_URL}/api/health`);
+    if (!response.ok) {
+      throw new Error(`Health check failed: ${response.statusText}`);
+    }
     return response.json();
   },
 

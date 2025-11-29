@@ -18,6 +18,7 @@ import { Route as QueriesRouteImport } from './routes/queries'
 import { Route as LongTermRouteImport } from './routes/long-term'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as LocalDnsRouteImport } from './routes/local-dns'
+import { Route as HealthRouteImport } from './routes/health'
 import { Route as GroupsRouteImport } from './routes/groups'
 import { Route as DomainsRouteImport } from './routes/domains'
 import { Route as DisableRouteImport } from './routes/disable'
@@ -72,6 +73,11 @@ const LoginRoute = LoginRouteImport.update({
 const LocalDnsRoute = LocalDnsRouteImport.update({
   id: '/local-dns',
   path: '/local-dns',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HealthRoute = HealthRouteImport.update({
+  id: '/health',
+  path: '/health',
   getParentRoute: () => rootRouteImport,
 } as any)
 const GroupsRoute = GroupsRouteImport.update({
@@ -135,6 +141,7 @@ export interface FileRoutesByFullPath {
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
   '/groups': typeof GroupsRoute
+  '/health': typeof HealthRoute
   '/local-dns': typeof LocalDnsRoute
   '/login': typeof LoginRoute
   '/long-term': typeof LongTermRoute
@@ -156,6 +163,7 @@ export interface FileRoutesByTo {
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
   '/groups': typeof GroupsRoute
+  '/health': typeof HealthRoute
   '/local-dns': typeof LocalDnsRoute
   '/login': typeof LoginRoute
   '/long-term': typeof LongTermRoute
@@ -178,6 +186,7 @@ export interface FileRoutesById {
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
   '/groups': typeof GroupsRoute
+  '/health': typeof HealthRoute
   '/local-dns': typeof LocalDnsRoute
   '/login': typeof LoginRoute
   '/long-term': typeof LongTermRoute
@@ -201,6 +210,7 @@ export interface FileRouteTypes {
     | '/disable'
     | '/domains'
     | '/groups'
+    | '/health'
     | '/local-dns'
     | '/login'
     | '/long-term'
@@ -222,6 +232,7 @@ export interface FileRouteTypes {
     | '/disable'
     | '/domains'
     | '/groups'
+    | '/health'
     | '/local-dns'
     | '/login'
     | '/long-term'
@@ -243,6 +254,7 @@ export interface FileRouteTypes {
     | '/disable'
     | '/domains'
     | '/groups'
+    | '/health'
     | '/local-dns'
     | '/login'
     | '/long-term'
@@ -265,6 +277,7 @@ export interface RootRouteChildren {
   DisableRoute: typeof DisableRoute
   DomainsRoute: typeof DomainsRoute
   GroupsRoute: typeof GroupsRoute
+  HealthRoute: typeof HealthRoute
   LocalDnsRoute: typeof LocalDnsRoute
   LoginRoute: typeof LoginRoute
   LongTermRoute: typeof LongTermRoute
@@ -339,6 +352,13 @@ declare module '@tanstack/react-router' {
       path: '/local-dns'
       fullPath: '/local-dns'
       preLoaderRoute: typeof LocalDnsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/health': {
+      id: '/health'
+      path: '/health'
+      fullPath: '/health'
+      preLoaderRoute: typeof HealthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/groups': {
@@ -435,6 +455,7 @@ const rootRouteChildren: RootRouteChildren = {
   DisableRoute: DisableRoute,
   DomainsRoute: DomainsRoute,
   GroupsRoute: GroupsRoute,
+  HealthRoute: HealthRoute,
   LocalDnsRoute: LocalDnsRoute,
   LoginRoute: LoginRoute,
   LongTermRoute: LongTermRoute,

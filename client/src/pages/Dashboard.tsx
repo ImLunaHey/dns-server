@@ -43,12 +43,7 @@ export function Dashboard() {
       <PageHeader
         title="Dashboard"
         description="Ad-blocking DNS with real-time monitoring"
-      >
-        <div className="flex items-center space-x-2">
-          <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse" />
-          <span className="text-sm text-gray-700 dark:text-gray-300 font-medium">Active</span>
-        </div>
-      </PageHeader>
+      />
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 md:py-8">

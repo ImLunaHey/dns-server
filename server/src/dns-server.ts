@@ -68,6 +68,11 @@ export class DNSServer {
   private cacheTTL: number = 300; // 5 minutes default
   private blockPageEnabled: boolean = false;
   private blockPageIP: string = '0.0.0.0'; // Default block IP
+  private startTime: number = Date.now();
+  private queryCount: number = 0;
+  private errorCount: number = 0;
+  private lastQueryTime: number = 0;
+  private queryRateHistory: number[] = []; // Queries per second for last 60 seconds
 
   constructor() {
     this.server = dgram.createSocket('udp4');
@@ -663,6 +668,70 @@ export class DNSServer {
     return dbQueries.getTotalCount();
   }
 
+  getHealth(): {
+    status: 'healthy' | 'degraded' | 'unhealthy';
+    startTime: string; // ISO timestamp
+    queryCount: number;
+    errorCount: number;
+    errorRate: number;
+    queriesPerSecond: number;
+    lastQueryTime: string | null; // ISO timestamp
+    servers: {
+      udp: boolean;
+      tcp: boolean;
+      dot: boolean;
+      doh: boolean;
+    };
+  } {
+
+    const errorRate = this.queryCount > 0 ? (this.errorCount / this.queryCount) * 100 : 0;
+    const queriesPerSecond = this.queryRateHistory.length;
+    const uptimeMinutesTotal = Math.floor((Date.now() - this.startTime) / 60000);
+
+    // Determine health status
+    // Server is healthy if:
+    // - Error rate is low (< 5%)
+    // - OR if no queries yet but server just started (< 10 minutes) - this is normal
+    // Server is degraded if:
+    // - Error rate is moderate (5-10%)
+    // - OR no queries received but server has been up for a while (could indicate network issues)
+    // Server is unhealthy if:
+    // - Error rate is high (> 10%) AND we've received queries (indicates actual problems)
+    let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
+
+    if (this.queryCount > 0) {
+      // We have query data, use error rate to determine health
+      if (errorRate > 10) {
+        status = 'unhealthy';
+      } else if (errorRate > 5) {
+        status = 'degraded';
+      }
+    } else {
+      // No queries yet - check if this is normal (just started) or concerning (been up a while)
+      if (uptimeMinutesTotal > 10) {
+        // Server has been up for more than 10 minutes with no queries - might indicate network issues
+        status = 'degraded';
+      }
+      // Otherwise, server is healthy (just started, waiting for queries)
+    }
+
+    return {
+      status,
+      startTime: new Date(this.startTime).toISOString(),
+      queryCount: this.queryCount,
+      errorCount: this.errorCount,
+      errorRate: Math.round(errorRate * 100) / 100,
+      queriesPerSecond,
+      lastQueryTime: this.lastQueryTime ? new Date(this.lastQueryTime).toISOString() : null,
+      servers: {
+        udp: this.port > 0, // UDP server is considered running if port is set
+        tcp: this.tcpServer.listening,
+        dot: this.dotServer !== null,
+        doh: true, // DoH is handled by HTTP server, always available if HTTP server is running
+      },
+    };
+  }
+
   getStats(): DNSStats & {
     blocklistSize: number;
     topDomainsArray: Array<{ domain: string; count: number }>;
@@ -774,9 +843,18 @@ export class DNSServer {
 
   async handleDNSQuery(msg: Buffer, clientIp: string, useTcp: boolean = false): Promise<Buffer> {
     const startTime = Date.now();
+    this.queryCount++;
+    this.lastQueryTime = startTime;
+
+    // Update query rate history (keep last 60 seconds)
+    const now = Date.now();
+    this.queryRateHistory = this.queryRateHistory.filter((time) => now - time < 60000);
+    this.queryRateHistory.push(now);
+
     const parsed = this.parseDNSQuery(msg);
 
     if (!parsed) {
+      this.errorCount++;
       throw new Error('Failed to parse DNS query');
     }
 
@@ -833,9 +911,14 @@ export class DNSServer {
           response = cached;
           console.log(`💾 Cached: ${domain}`);
         } else {
-          response = await this.forwardQuery(msg, domain, clientIp, useTcp);
-          this.setCachedResponse(domain, type, response);
-          console.log(`✅ Allowed: ${domain}`);
+          try {
+            response = await this.forwardQuery(msg, domain, clientIp, useTcp);
+            this.setCachedResponse(domain, type, response);
+            console.log(`✅ Allowed: ${domain}`);
+          } catch (error) {
+            this.errorCount++;
+            throw error;
+          }
         }
       }
     } else {
@@ -845,9 +928,14 @@ export class DNSServer {
         response = cached;
         console.log(`💾 Cached: ${domain}`);
       } else {
-        response = await this.forwardQuery(msg, domain, clientIp, useTcp);
-        this.setCachedResponse(domain, type, response);
-        console.log(`✅ Allowed: ${domain}`);
+        try {
+          response = await this.forwardQuery(msg, domain, clientIp, useTcp);
+          this.setCachedResponse(domain, type, response);
+          console.log(`✅ Allowed: ${domain}`);
+        } catch (error) {
+          this.errorCount++;
+          throw error;
+        }
       }
     }
 

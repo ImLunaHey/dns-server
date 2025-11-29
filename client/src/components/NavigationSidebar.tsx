@@ -13,6 +13,7 @@ const navigation = [
   { name: "Dashboard", href: "/", icon: "📊" },
   { name: "Query Log", href: "/queries", icon: "📋" },
   { name: "Long-term Data", href: "/long-term", icon: "📈" },
+  { name: "Server Health", href: "/health", icon: "💚" },
   { name: "Groups", href: "/groups", icon: "👥" },
   { name: "Clients", href: "/clients", icon: "💻" },
   { name: "Domains", href: "/domains", icon: "🌐" },
