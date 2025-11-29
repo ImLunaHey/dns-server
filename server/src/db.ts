@@ -175,6 +175,7 @@ db.exec(`
     domain TEXT NOT NULL,
     upstreamDNS TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
+    priority INTEGER NOT NULL DEFAULT 0,
     comment TEXT,
     createdAt INTEGER NOT NULL,
     updatedAt INTEGER NOT NULL
@@ -1871,13 +1872,14 @@ export const dbBlocklistUpdates = {
 };
 
 export const dbConditionalForwarding = {
-  add(domain: string, upstreamDNS: string, comment?: string) {
+  add(domain: string, upstreamDNS: string, comment?: string, priority: number = 0) {
     const now = Date.now();
     const stmt = db.prepare(`
-      INSERT INTO conditional_forwarding (domain, upstreamDNS, enabled, comment, createdAt, updatedAt)
-      VALUES (?, ?, 1, ?, ?, ?)
+      INSERT INTO conditional_forwarding (domain, upstreamDNS, enabled, priority, comment, createdAt, updatedAt)
+      VALUES (?, ?, 1, ?, ?, ?, ?)
     `);
-    stmt.run(domain.toLowerCase(), upstreamDNS, comment || null, now, now);
+    const result = stmt.run(domain.toLowerCase(), upstreamDNS, priority, comment || null, now, now);
+    return result.lastInsertRowid as number;
   },
 
   remove(id: number) {
@@ -1886,12 +1888,13 @@ export const dbConditionalForwarding = {
   },
 
   getAll() {
-    const stmt = db.prepare('SELECT * FROM conditional_forwarding ORDER BY domain ASC');
+    const stmt = db.prepare('SELECT * FROM conditional_forwarding ORDER BY priority DESC, domain ASC');
     return stmt.all() as Array<{
       id: number;
       domain: string;
       upstreamDNS: string;
       enabled: number;
+      priority: number;
       comment: string | null;
       createdAt: number;
       updatedAt: number;
@@ -1899,12 +1902,13 @@ export const dbConditionalForwarding = {
   },
 
   getEnabled() {
-    const stmt = db.prepare('SELECT * FROM conditional_forwarding WHERE enabled = 1 ORDER BY domain ASC');
+    const stmt = db.prepare('SELECT * FROM conditional_forwarding WHERE enabled = 1 ORDER BY priority DESC, domain ASC');
     return stmt.all() as Array<{
       id: number;
       domain: string;
       upstreamDNS: string;
       enabled: number;
+      priority: number;
       comment: string | null;
       createdAt: number;
       updatedAt: number;
@@ -1916,34 +1920,71 @@ export const dbConditionalForwarding = {
     stmt.run(enabled ? 1 : 0, Date.now(), id);
   },
 
-  update(id: number, domain: string, upstreamDNS: string, comment?: string) {
-    const stmt = db.prepare(`
-      UPDATE conditional_forwarding 
-      SET domain = ?, upstreamDNS = ?, comment = ?, updatedAt = ?
-      WHERE id = ?
-    `);
-    stmt.run(domain.toLowerCase(), upstreamDNS, comment || null, Date.now(), id);
+  update(id: number, domain: string, upstreamDNS: string, comment?: string, priority?: number) {
+    const now = Date.now();
+    if (priority !== undefined && priority !== null) {
+      const stmt = db.prepare(`
+        UPDATE conditional_forwarding
+        SET domain = ?, upstreamDNS = ?, comment = ?, priority = ?, updatedAt = ?
+        WHERE id = ?
+      `);
+      stmt.run(domain.toLowerCase(), upstreamDNS, comment || null, priority, now, id);
+    } else {
+      const stmt = db.prepare(`
+        UPDATE conditional_forwarding
+        SET domain = ?, upstreamDNS = ?, comment = ?, updatedAt = ?
+        WHERE id = ?
+      `);
+      stmt.run(domain.toLowerCase(), upstreamDNS, comment || null, now, id);
+    }
   },
 
   findUpstreamDNS(domain: string): string | null {
     const lower = domain.toLowerCase();
     const rules = this.getEnabled();
 
-    // Check exact matches first
+    // Track best match (longest domain match wins, then highest priority)
+    let bestMatch: { domain: string; upstreamDNS: string; priority: number; matchLength: number } | null = null;
+
     for (const rule of rules) {
-      if (rule.domain === lower) {
-        return rule.upstreamDNS;
+      const ruleDomain = rule.domain.toLowerCase();
+      let matchLength = 0;
+      let isMatch = false;
+
+      // Check for wildcard pattern (e.g., *.example.com)
+      if (ruleDomain.startsWith('*.')) {
+        const pattern = ruleDomain.substring(2); // Remove '*.'
+        if (lower === pattern || lower.endsWith('.' + pattern)) {
+          isMatch = true;
+          matchLength = pattern.length;
+        }
+      }
+      // Check exact match
+      else if (ruleDomain === lower) {
+        isMatch = true;
+        matchLength = ruleDomain.length;
+      }
+      // Check subdomain match (domain ends with .ruleDomain)
+      else if (lower.endsWith('.' + ruleDomain)) {
+        isMatch = true;
+        matchLength = ruleDomain.length;
+      }
+
+      if (isMatch) {
+        // Prefer longer domain matches, then higher priority
+        if (!bestMatch || matchLength > bestMatch.matchLength || 
+            (matchLength === bestMatch.matchLength && rule.priority > bestMatch.priority)) {
+          bestMatch = {
+            domain: ruleDomain,
+            upstreamDNS: rule.upstreamDNS,
+            priority: rule.priority,
+            matchLength,
+          };
+        }
       }
     }
 
-    // Check if domain ends with any rule domain (subdomain matching)
-    for (const rule of rules) {
-      if (lower.endsWith('.' + rule.domain) || lower === rule.domain) {
-        return rule.upstreamDNS;
-      }
-    }
-
-    return null;
+    return bestMatch ? bestMatch.upstreamDNS : null;
   },
 };
 

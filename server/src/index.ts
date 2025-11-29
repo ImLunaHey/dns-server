@@ -1202,21 +1202,21 @@ app.get('/api/conditional-forwarding', requireAuth, (c) => {
 });
 
 app.post('/api/conditional-forwarding', requireAuth, async (c) => {
-  const { domain, upstreamDNS, comment } = await c.req.json();
+  const { domain, upstreamDNS, comment, priority } = await c.req.json();
   if (!domain || !upstreamDNS) {
     return c.json({ error: 'domain and upstreamDNS are required' }, 400);
   }
-  dbConditionalForwarding.add(domain, upstreamDNS, comment);
+  dbConditionalForwarding.add(domain, upstreamDNS, comment, priority || 0);
   return c.json({ success: true });
 });
 
 app.put('/api/conditional-forwarding/:id', requireAuth, async (c) => {
   const id = parseInt(c.req.param('id'), 10);
-  const { domain, upstreamDNS, comment } = await c.req.json();
+  const { domain, upstreamDNS, comment, priority } = await c.req.json();
   if (!domain || !upstreamDNS) {
     return c.json({ error: 'domain and upstreamDNS are required' }, 400);
   }
-  dbConditionalForwarding.update(id, domain, upstreamDNS, comment);
+  dbConditionalForwarding.update(id, domain, upstreamDNS, comment, priority);
   return c.json({ success: true });
 });
 
