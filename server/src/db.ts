@@ -862,6 +862,55 @@ export const dbQueries = {
     `);
     const topBlocked = topBlockedStmt.all() as Array<{ domain: string; count: number }>;
 
+    // Performance metrics
+    const responseTimeStmt = db.prepare(`
+      SELECT 
+        AVG(responseTime) as avgResponseTime,
+        MIN(responseTime) as minResponseTime,
+        MAX(responseTime) as maxResponseTime,
+        COUNT(*) as count
+      FROM queries
+      WHERE responseTime IS NOT NULL
+    `);
+    const responseTimeStats = responseTimeStmt.get() as {
+      avgResponseTime: number | null;
+      minResponseTime: number | null;
+      maxResponseTime: number | null;
+      count: number;
+    };
+
+    // Calculate percentiles (p50, p95, p99)
+    let p50: number | null = null;
+    let p95: number | null = null;
+    let p99: number | null = null;
+
+    if (responseTimeStats.count > 0) {
+      const percentileStmt = db.prepare(`
+        SELECT responseTime
+        FROM queries
+        WHERE responseTime IS NOT NULL
+        ORDER BY responseTime
+      `);
+      const responseTimes = (percentileStmt.all() as Array<{ responseTime: number }>).map(
+        (r) => r.responseTime,
+      );
+
+      if (responseTimes.length > 0) {
+        const getPercentile = (percentile: number): number => {
+          const index = Math.ceil((percentile / 100) * responseTimes.length) - 1;
+          return responseTimes[Math.max(0, index)] ?? 0;
+        };
+
+        p50 = getPercentile(50);
+        p95 = getPercentile(95);
+        p99 = getPercentile(99);
+      }
+    }
+
+    // Cache hit rate
+    const cacheHitRate =
+      totalQueries > 0 ? (cachedQueries / totalQueries) * 100 : 0;
+
     return {
       totalQueries,
       blockedQueries,
@@ -869,6 +918,17 @@ export const dbQueries = {
       cachedQueries,
       topDomains,
       topBlocked,
+      performance: {
+        avgResponseTime: responseTimeStats.avgResponseTime
+          ? Math.round(responseTimeStats.avgResponseTime * 100) / 100
+          : null,
+        minResponseTime: responseTimeStats.minResponseTime,
+        maxResponseTime: responseTimeStats.maxResponseTime,
+        p50,
+        p95,
+        p99,
+        cacheHitRate: Math.round(cacheHitRate * 100) / 100,
+      },
     };
   },
 

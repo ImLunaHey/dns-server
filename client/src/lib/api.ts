@@ -57,6 +57,15 @@ export interface DNSStats {
     totalCount: number;
     blockRate: number;
   }>;
+  performance?: {
+    avgResponseTime: number | null;
+    minResponseTime: number | null;
+    maxResponseTime: number | null;
+    p50: number | null;
+    p95: number | null;
+    p99: number | null;
+    cacheHitRate: number;
+  };
 }
 
 export const api = {

@@ -54,13 +54,19 @@ export function Dashboard() {
               try {
                 const blob = await api.exportStatsCSV();
                 const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
+                const a = document.createElement("a");
                 a.href = url;
-                a.download = `dns-stats-${new Date().toISOString().split('T')[0]}.csv`;
+                a.download = `dns-stats-${
+                  new Date().toISOString().split("T")[0]
+                }.csv`;
                 a.click();
                 URL.revokeObjectURL(url);
               } catch (error) {
-                alert(error instanceof Error ? error.message : 'Failed to export statistics');
+                alert(
+                  error instanceof Error
+                    ? error.message
+                    : "Failed to export statistics"
+                );
               }
             }}
             variant="outline"
@@ -72,13 +78,19 @@ export function Dashboard() {
               try {
                 const blob = await api.exportStatsJSON();
                 const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
+                const a = document.createElement("a");
                 a.href = url;
-                a.download = `dns-stats-${new Date().toISOString().split('T')[0]}.json`;
+                a.download = `dns-stats-${
+                  new Date().toISOString().split("T")[0]
+                }.json`;
                 a.click();
                 URL.revokeObjectURL(url);
               } catch (error) {
-                alert(error instanceof Error ? error.message : 'Failed to export statistics');
+                alert(
+                  error instanceof Error
+                    ? error.message
+                    : "Failed to export statistics"
+                );
               }
             }}
             variant="outline"

@@ -44,6 +44,15 @@ export interface DNSStats {
   topDomains: Map<string, number>;
   topBlocked: Map<string, number>;
   topClients: Map<string, number>;
+  performance?: {
+    avgResponseTime: number | null;
+    minResponseTime: number | null;
+    maxResponseTime: number | null;
+    p50: number | null;
+    p95: number | null;
+    p99: number | null;
+    cacheHitRate: number;
+  };
 }
 
 interface CachedDNSResponse {
@@ -920,6 +929,7 @@ export class DNSServer {
       topDomains: new Map(), // Not used, kept for interface compatibility
       topBlocked: new Map(), // Not used, kept for interface compatibility
       topClients: new Map(), // Not used, kept for interface compatibility
+      performance: dbStats.performance,
       blocklistSize: this.blocklist.size,
       topDomainsArray: dbStats.topDomains,
       topBlockedArray: dbStats.topBlocked,

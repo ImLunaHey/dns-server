@@ -696,6 +696,20 @@ app.get('/api/stats/export/csv', requireAuth, (c) => {
   csvRows.push(`Cached Queries,${stats.cachedQueries}`);
   csvRows.push(`Blocklist Size,${stats.blocklistSize}`);
   csvRows.push('');
+  
+  // Performance Metrics
+  if (stats.performance) {
+    csvRows.push('Performance Metrics');
+    csvRows.push('Metric,Value');
+    csvRows.push(`Average Response Time (ms),${stats.performance.avgResponseTime ?? 'N/A'}`);
+    csvRows.push(`Min Response Time (ms),${stats.performance.minResponseTime ?? 'N/A'}`);
+    csvRows.push(`Max Response Time (ms),${stats.performance.maxResponseTime ?? 'N/A'}`);
+    csvRows.push(`P50 Response Time (ms),${stats.performance.p50 ?? 'N/A'}`);
+    csvRows.push(`P95 Response Time (ms),${stats.performance.p95 ?? 'N/A'}`);
+    csvRows.push(`P99 Response Time (ms),${stats.performance.p99 ?? 'N/A'}`);
+    csvRows.push(`Cache Hit Rate (%),${stats.performance.cacheHitRate.toFixed(2)}`);
+    csvRows.push('');
+  }
 
   // Top Domains
   csvRows.push('Top Domains');
