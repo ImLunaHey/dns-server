@@ -82,6 +82,11 @@ export const api = {
       startTime?: number;
       endTime?: number;
       domain?: string;
+      domainPattern?: string;
+      cached?: boolean;
+      blockReason?: string;
+      minResponseTime?: number;
+      maxResponseTime?: number;
     }
   ): Promise<DNSQuery[]> {
     const params = new URLSearchParams({ limit: limit.toString() });
@@ -102,6 +107,21 @@ export const api = {
     }
     if (filters?.domain) {
       params.append("domain", filters.domain);
+    }
+    if (filters?.domainPattern) {
+      params.append("domainPattern", filters.domainPattern);
+    }
+    if (filters?.cached !== undefined) {
+      params.append("cached", filters.cached.toString());
+    }
+    if (filters?.blockReason) {
+      params.append("blockReason", filters.blockReason);
+    }
+    if (filters?.minResponseTime !== undefined) {
+      params.append("minResponseTime", filters.minResponseTime.toString());
+    }
+    if (filters?.maxResponseTime !== undefined) {
+      params.append("maxResponseTime", filters.maxResponseTime.toString());
     }
     const response = await fetch(`${API_URL}/api/queries?${params}`);
     return response.json();
@@ -331,6 +351,11 @@ export const api = {
     startTime?: number;
     endTime?: number;
     domain?: string;
+    domainPattern?: string;
+    cached?: boolean;
+    blockReason?: string;
+    minResponseTime?: number;
+    maxResponseTime?: number;
   }): Promise<Blob> {
     const params = new URLSearchParams();
     if (filters?.clientIp) params.append('clientIp', filters.clientIp);
@@ -339,12 +364,22 @@ export const api = {
     if (filters?.startTime) params.append('startTime', filters.startTime.toString());
     if (filters?.endTime) params.append('endTime', filters.endTime.toString());
     if (filters?.domain) params.append('domain', filters.domain);
+    if (filters?.domainPattern) params.append('domainPattern', filters.domainPattern);
+    if (filters?.cached !== undefined) params.append('cached', filters.cached.toString());
+    if (filters?.blockReason) params.append('blockReason', filters.blockReason);
+    if (filters?.minResponseTime !== undefined) params.append('minResponseTime', filters.minResponseTime.toString());
+    if (filters?.maxResponseTime !== undefined) params.append('maxResponseTime', filters.maxResponseTime.toString());
 
     const response = await fetch(`${API_URL}/api/queries/export/json?${params}`);
     if (!response.ok) {
       throw new Error(`Failed to export queries: ${response.statusText}`);
     }
     return response.blob();
+  },
+
+  async getBlockReasons(): Promise<string[]> {
+    const response = await fetch(`${API_URL}/api/queries/block-reasons`);
+    return response.json();
   },
 
   async getBlockPageSettings(): Promise<{

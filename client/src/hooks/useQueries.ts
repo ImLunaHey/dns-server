@@ -10,6 +10,11 @@ interface UseQueriesOptions {
     startTime?: number;
     endTime?: number;
     domain?: string;
+    domainPattern?: string;
+    cached?: boolean;
+    blockReason?: string;
+    minResponseTime?: number;
+    maxResponseTime?: number;
   };
   refetchInterval?: number | false;
   enabled?: boolean;

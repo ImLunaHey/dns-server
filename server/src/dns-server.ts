@@ -758,6 +758,11 @@ export class DNSServer {
       startTime?: number;
       endTime?: number;
       domain?: string;
+      domainPattern?: string;
+      cached?: boolean;
+      blockReason?: string;
+      minResponseTime?: number;
+      maxResponseTime?: number;
       offset?: number;
     },
   ): DNSQuery[] {
@@ -771,6 +776,11 @@ export class DNSServer {
         startTime: filters?.startTime,
         endTime: filters?.endTime,
         domain: filters?.domain,
+        domainPattern: filters?.domainPattern,
+        cached: filters?.cached,
+        blockReason: filters?.blockReason,
+        minResponseTime: filters?.minResponseTime,
+        maxResponseTime: filters?.maxResponseTime,
       });
     }
     return dbQueries.getRecent(limit);
@@ -784,6 +794,11 @@ export class DNSServer {
       startTime?: number;
       endTime?: number;
       domain?: string;
+      domainPattern?: string;
+      cached?: boolean;
+      blockReason?: string;
+      minResponseTime?: number;
+      maxResponseTime?: number;
     },
   ): number {
     if (clientIp || filters) {
@@ -794,6 +809,11 @@ export class DNSServer {
         startTime: filters?.startTime,
         endTime: filters?.endTime,
         domain: filters?.domain,
+        domainPattern: filters?.domainPattern,
+        cached: filters?.cached,
+        blockReason: filters?.blockReason,
+        minResponseTime: filters?.minResponseTime,
+        maxResponseTime: filters?.maxResponseTime,
       });
     }
     return dbQueries.getTotalCount();

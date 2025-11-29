@@ -437,6 +437,11 @@ export const dbQueries = {
     startTime?: number;
     endTime?: number;
     domain?: string;
+    domainPattern?: string; // Supports wildcards like *.example.com
+    cached?: boolean;
+    blockReason?: string;
+    minResponseTime?: number;
+    maxResponseTime?: number;
   }): DNSQuery[] {
     const conditions: string[] = [];
     const values: unknown[] = [];
@@ -467,8 +472,42 @@ export const dbQueries = {
     }
 
     if (filters.domain) {
+      // Simple LIKE search
       conditions.push('domain LIKE ?');
       values.push(`%${filters.domain.toLowerCase()}%`);
+    } else if (filters.domainPattern) {
+      // Pattern matching with wildcard support
+      // Convert wildcards to SQL LIKE patterns
+      // *.example.com -> %example.com
+      // example.* -> example.%
+      // *example* -> %example%
+      let pattern = filters.domainPattern.toLowerCase();
+      // Escape SQL wildcards
+      pattern = pattern.replace(/%/g, '\\%').replace(/_/g, '\\_');
+      // Convert * wildcards to SQL %
+      pattern = pattern.replace(/\*/g, '%');
+      conditions.push('domain LIKE ?');
+      values.push(pattern);
+    }
+
+    if (filters.cached !== undefined) {
+      conditions.push('cached = ?');
+      values.push(filters.cached ? 1 : 0);
+    }
+
+    if (filters.blockReason) {
+      conditions.push('blockReason = ?');
+      values.push(filters.blockReason);
+    }
+
+    if (filters.minResponseTime !== undefined) {
+      conditions.push('responseTime >= ?');
+      values.push(filters.minResponseTime);
+    }
+
+    if (filters.maxResponseTime !== undefined) {
+      conditions.push('responseTime <= ?');
+      values.push(filters.maxResponseTime);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -516,6 +555,11 @@ export const dbQueries = {
     startTime?: number;
     endTime?: number;
     domain?: string;
+    domainPattern?: string;
+    cached?: boolean;
+    blockReason?: string;
+    minResponseTime?: number;
+    maxResponseTime?: number;
   }): DNSQuery[] {
     const conditions: string[] = [];
     const values: unknown[] = [];
@@ -548,6 +592,32 @@ export const dbQueries = {
     if (filters.domain) {
       conditions.push('domain LIKE ?');
       values.push(`%${filters.domain.toLowerCase()}%`);
+    } else if (filters.domainPattern) {
+      let pattern = filters.domainPattern.toLowerCase();
+      pattern = pattern.replace(/%/g, '\\%').replace(/_/g, '\\_');
+      pattern = pattern.replace(/\*/g, '%');
+      conditions.push('domain LIKE ?');
+      values.push(pattern);
+    }
+
+    if (filters.cached !== undefined) {
+      conditions.push('cached = ?');
+      values.push(filters.cached ? 1 : 0);
+    }
+
+    if (filters.blockReason) {
+      conditions.push('blockReason = ?');
+      values.push(filters.blockReason);
+    }
+
+    if (filters.minResponseTime !== undefined) {
+      conditions.push('responseTime >= ?');
+      values.push(filters.minResponseTime);
+    }
+
+    if (filters.maxResponseTime !== undefined) {
+      conditions.push('responseTime <= ?');
+      values.push(filters.maxResponseTime);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -592,6 +662,11 @@ export const dbQueries = {
     startTime?: number;
     endTime?: number;
     domain?: string;
+    domainPattern?: string;
+    cached?: boolean;
+    blockReason?: string;
+    minResponseTime?: number;
+    maxResponseTime?: number;
   }): number {
     const conditions: string[] = [];
     const values: unknown[] = [];
@@ -624,6 +699,32 @@ export const dbQueries = {
     if (filters.domain) {
       conditions.push('domain LIKE ?');
       values.push(`%${filters.domain.toLowerCase()}%`);
+    } else if (filters.domainPattern) {
+      let pattern = filters.domainPattern.toLowerCase();
+      pattern = pattern.replace(/%/g, '\\%').replace(/_/g, '\\_');
+      pattern = pattern.replace(/\*/g, '%');
+      conditions.push('domain LIKE ?');
+      values.push(pattern);
+    }
+
+    if (filters.cached !== undefined) {
+      conditions.push('cached = ?');
+      values.push(filters.cached ? 1 : 0);
+    }
+
+    if (filters.blockReason) {
+      conditions.push('blockReason = ?');
+      values.push(filters.blockReason);
+    }
+
+    if (filters.minResponseTime !== undefined) {
+      conditions.push('responseTime >= ?');
+      values.push(filters.minResponseTime);
+    }
+
+    if (filters.maxResponseTime !== undefined) {
+      conditions.push('responseTime <= ?');
+      values.push(filters.maxResponseTime);
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -641,6 +742,12 @@ export const dbQueries = {
     const stmt = db.prepare('SELECT COUNT(*) as count FROM queries');
     const result = stmt.get() as { count: number };
     return result.count;
+  },
+
+  getUniqueBlockReasons(): string[] {
+    const stmt = db.prepare('SELECT DISTINCT blockReason FROM queries WHERE blockReason IS NOT NULL ORDER BY blockReason');
+    const rows = stmt.all() as Array<{ blockReason: string }>;
+    return rows.map((row) => row.blockReason);
   },
 
   cleanupOldQueries(daysToKeep: number = 7) {

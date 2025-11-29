@@ -22,6 +22,13 @@ export function QueryLogPage() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [domainSearch, setDomainSearch] = useState('');
+  const [domainPattern, setDomainPattern] = useState('');
+  const [cached, setCached] = useState<boolean | undefined>(undefined);
+  const [blockReason, setBlockReason] = useState<string>('');
+  const [minResponseTime, setMinResponseTime] = useState<string>('');
+  const [maxResponseTime, setMaxResponseTime] = useState<string>('');
+  const [blockReasons, setBlockReasons] = useState<string[]>([]);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [realTimeEnabled, setRealTimeEnabled] = useState(false);
   const [queries, setQueries] = useState<DNSQuery[]>([]);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -29,6 +36,11 @@ export function QueryLogPage() {
 
   const startTime = startDate ? new Date(startDate).getTime() : undefined;
   const endTime = endDate ? new Date(endDate).getTime() + 86400000 - 1 : undefined; // End of day
+
+  // Load block reasons on mount
+  useEffect(() => {
+    api.getBlockReasons().then(setBlockReasons).catch(console.error);
+  }, []);
 
   const { data: initialQueries = [], isLoading: queriesLoading } = useQueries({
     limit: 1000,
@@ -39,6 +51,11 @@ export function QueryLogPage() {
       startTime,
       endTime,
       domain: domainSearch || undefined,
+      domainPattern: domainPattern || undefined,
+      cached,
+      blockReason: blockReason || undefined,
+      minResponseTime: minResponseTime ? parseInt(minResponseTime, 10) : undefined,
+      maxResponseTime: maxResponseTime ? parseInt(maxResponseTime, 10) : undefined,
     },
     enabled: !realTimeEnabled, // Only fetch when real-time is disabled
   });
@@ -155,6 +172,11 @@ export function QueryLogPage() {
                   startTime,
                   endTime,
                   domain: domainSearch || undefined,
+                  domainPattern: domainPattern || undefined,
+                  cached,
+                  blockReason: blockReason || undefined,
+                  minResponseTime: minResponseTime ? parseInt(minResponseTime, 10) : undefined,
+                  maxResponseTime: maxResponseTime ? parseInt(maxResponseTime, 10) : undefined,
                 };
                 const blob = await api.exportQueriesCSV(filters);
                 const url = URL.createObjectURL(blob);
@@ -181,6 +203,11 @@ export function QueryLogPage() {
                   startTime,
                   endTime,
                   domain: domainSearch || undefined,
+                  domainPattern: domainPattern || undefined,
+                  cached,
+                  blockReason: blockReason || undefined,
+                  minResponseTime: minResponseTime ? parseInt(minResponseTime, 10) : undefined,
+                  maxResponseTime: maxResponseTime ? parseInt(maxResponseTime, 10) : undefined,
                 };
                 const blob = await api.exportQueriesJSON(filters);
                 const url = URL.createObjectURL(blob);
@@ -204,8 +231,19 @@ export function QueryLogPage() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Filters */}
         <Panel className="mb-6">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Filters</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0 mb-4">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Filters</h2>
+            <Button
+              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+              variant="ghost"
+              size="sm"
+            >
+              {showAdvancedFilters ? 'Hide Advanced' : 'Show Advanced'}
+            </Button>
+          </div>
+
+          {/* Basic Filters */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Domain Search
@@ -224,7 +262,7 @@ export function QueryLogPage() {
                 value={type}
                 onChange={(e) => setType(e.target.value)}
                 className={cn(
-                  "w-full px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
+                  "w-full h-10 px-4 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
                   "focus:outline-none focus:ring-2 focus:ring-blue-500"
                 )}
               >
@@ -238,7 +276,6 @@ export function QueryLogPage() {
                 <option value="PTR">PTR</option>
               </select>
             </div>
-
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Status
@@ -250,7 +287,7 @@ export function QueryLogPage() {
                   setBlocked(value === '' ? undefined : value === 'blocked');
                 }}
                 className={cn(
-                  "w-full px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
+                  "w-full h-10 px-4 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
                   "focus:outline-none focus:ring-2 focus:ring-blue-500"
                 )}
               >
@@ -259,55 +296,149 @@ export function QueryLogPage() {
                 <option value="allowed">Allowed</option>
               </select>
             </div>
-
-            <div>
+            <div className="sm:col-span-2 xl:col-span-2">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Start Date
+                Date Range
               </label>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className={cn(
-                  "w-full px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
-                  "focus:outline-none focus:ring-2 focus:ring-blue-500"
-                )}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                End Date
-              </label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                className={cn(
-                  "w-full px-4 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
-                  "focus:outline-none focus:ring-2 focus:ring-blue-500"
-                )}
-              />
+              <div className="flex gap-2">
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  placeholder="Start"
+                  className={cn(
+                    "flex-1 min-w-44 h-10 px-4 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
+                    "focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  )}
+                />
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  placeholder="End"
+                  className={cn(
+                    "flex-1 min-w-44 h-10 px-4 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
+                    "focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  )}
+                />
+              </div>
             </div>
           </div>
 
-              {(type || blocked !== undefined || startDate || endDate || domainSearch) && (
-                <div className="mt-4">
-                  <Button
-                    onClick={() => {
-                      setType('');
-                      setBlocked(undefined);
-                      setStartDate('');
-                      setEndDate('');
-                      setDomainSearch('');
-                    }}
-                    color="gray"
-                    variant="outline"
-                  >
-                    Clear Filters
-                  </Button>
+          {/* Advanced Filters (Collapsible) */}
+          {showAdvancedFilters && (
+            <>
+              <div className="border-t border-gray-200 dark:border-gray-700 my-4"></div>
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">Advanced Filters</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Domain Pattern
+                    <span className="text-xs text-gray-500 dark:text-gray-400 ml-1">(wildcards: *.example.com)</span>
+                  </label>
+                  <SearchInput
+                    value={domainPattern}
+                    onChange={setDomainPattern}
+                    placeholder="*.example.com"
+                  />
                 </div>
-              )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Cached
+                  </label>
+                  <select
+                    value={cached === undefined ? '' : cached ? 'yes' : 'no'}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setCached(value === '' ? undefined : value === 'yes');
+                    }}
+                    className={cn(
+                      "w-full h-10 px-4 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
+                      "focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    )}
+                  >
+                    <option value="">All</option>
+                    <option value="yes">Cached</option>
+                    <option value="no">Not Cached</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Block Reason
+                  </label>
+                  <select
+                    value={blockReason}
+                    onChange={(e) => setBlockReason(e.target.value)}
+                    className={cn(
+                      "w-full h-10 px-4 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
+                      "focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    )}
+                  >
+                    <option value="">All Reasons</option>
+                    {blockReasons.map((reason) => (
+                      <option key={reason} value={reason}>
+                        {reason}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="sm:col-span-2 xl:col-span-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Response Time (ms)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="number"
+                      value={minResponseTime}
+                      onChange={(e) => setMinResponseTime(e.target.value)}
+                      placeholder="Min"
+                      className={cn(
+                        "flex-1 min-w-[80px] h-10 px-4 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
+                        "focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      )}
+                    />
+                    <input
+                      type="number"
+                      value={maxResponseTime}
+                      onChange={(e) => setMaxResponseTime(e.target.value)}
+                      placeholder="Max"
+                      className={cn(
+                        "flex-1 min-w-[80px] h-10 px-4 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-white",
+                        "focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      )}
+                    />
+                  </div>
+                </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Clear Filters Button */}
+          {(type || blocked !== undefined || startDate || endDate || domainSearch || domainPattern || cached !== undefined || blockReason || minResponseTime || maxResponseTime) && (
+            <div className="mt-4">
+              <Button
+                onClick={() => {
+                  setType('');
+                  setBlocked(undefined);
+                  setStartDate('');
+                  setEndDate('');
+                  setDomainSearch('');
+                  setDomainPattern('');
+                  setCached(undefined);
+                  setBlockReason('');
+                  setMinResponseTime('');
+                  setMaxResponseTime('');
+                }}
+                color="gray"
+                variant="outline"
+                size="sm"
+              >
+                Clear All Filters
+              </Button>
+            </div>
+          )}
         </Panel>
 
         <QueryLog 

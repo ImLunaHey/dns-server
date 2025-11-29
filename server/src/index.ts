@@ -664,6 +664,11 @@ app.get('/api/queries', requireAuth, (c) => {
   const startTime = c.req.query('startTime');
   const endTime = c.req.query('endTime');
   const domain = c.req.query('domain');
+  const domainPattern = c.req.query('domainPattern');
+  const cached = c.req.query('cached');
+  const blockReason = c.req.query('blockReason');
+  const minResponseTime = c.req.query('minResponseTime');
+  const maxResponseTime = c.req.query('maxResponseTime');
   const includeCount = c.req.query('includeCount') === 'true';
 
   const filters = {
@@ -672,6 +677,11 @@ app.get('/api/queries', requireAuth, (c) => {
     startTime: startTime ? parseInt(startTime, 10) : undefined,
     endTime: endTime ? parseInt(endTime, 10) : undefined,
     domain: domain || undefined,
+    domainPattern: domainPattern || undefined,
+    cached: cached !== undefined ? cached === 'true' : undefined,
+    blockReason: blockReason || undefined,
+    minResponseTime: minResponseTime ? parseInt(minResponseTime, 10) : undefined,
+    maxResponseTime: maxResponseTime ? parseInt(maxResponseTime, 10) : undefined,
     offset,
   };
 
@@ -688,6 +698,12 @@ app.get('/api/queries', requireAuth, (c) => {
   }
 
   return c.json(queries);
+});
+
+// Get unique block reasons
+app.get('/api/queries/block-reasons', requireAuth, (c) => {
+  const reasons = dbQueries.getUniqueBlockReasons();
+  return c.json(reasons);
 });
 
 // Export queries as CSV
@@ -762,6 +778,11 @@ app.get('/api/queries/export/json', requireAuth, (c) => {
   const startTime = c.req.query('startTime');
   const endTime = c.req.query('endTime');
   const domain = c.req.query('domain');
+  const domainPattern = c.req.query('domainPattern');
+  const cached = c.req.query('cached');
+  const blockReason = c.req.query('blockReason');
+  const minResponseTime = c.req.query('minResponseTime');
+  const maxResponseTime = c.req.query('maxResponseTime');
 
   const filters = {
     clientIp: clientIp || undefined,
@@ -770,6 +791,11 @@ app.get('/api/queries/export/json', requireAuth, (c) => {
     startTime: startTime ? parseInt(startTime, 10) : undefined,
     endTime: endTime ? parseInt(endTime, 10) : undefined,
     domain: domain || undefined,
+    domainPattern: domainPattern || undefined,
+    cached: cached !== undefined ? cached === 'true' : undefined,
+    blockReason: blockReason || undefined,
+    minResponseTime: minResponseTime ? parseInt(minResponseTime, 10) : undefined,
+    maxResponseTime: maxResponseTime ? parseInt(maxResponseTime, 10) : undefined,
   };
 
   const queries = dbQueries.getAllFiltered(filters);
