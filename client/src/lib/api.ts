@@ -31,6 +31,7 @@ export interface ServerHealth {
     udp: boolean;
     tcp: boolean;
     dot: boolean;
+    doq: boolean;
     doh: boolean;
   };
 }
@@ -334,6 +335,14 @@ export const api = {
     dotPort?: number;
     dotCertPath?: string;
     dotKeyPath?: string;
+    doqEnabled?: boolean;
+    doqPort?: number;
+    doqCertPath?: string;
+    doqKeyPath?: string;
+    doqSupported?: boolean;
+    nodeVersion?: string;
+    dnssecValidation?: boolean;
+    dnssecChainValidation?: boolean;
   }> {
     const response = await fetch(`${API_URL}/api/settings`);
     return response.json();
@@ -354,6 +363,12 @@ export const api = {
     dotPort?: number;
     dotCertPath?: string;
     dotKeyPath?: string;
+    doqEnabled?: boolean;
+    doqPort?: number;
+    doqCertPath?: string;
+    doqKeyPath?: string;
+    dnssecValidation?: boolean;
+    dnssecChainValidation?: boolean;
   }): Promise<void> {
     await fetch(`${API_URL}/api/settings`, {
       method: "PUT",

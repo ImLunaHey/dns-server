@@ -702,7 +702,7 @@ app.get('/api/stats/export/csv', requireAuth, (c) => {
   csvRows.push(`Cached Queries,${stats.cachedQueries}`);
   csvRows.push(`Blocklist Size,${stats.blocklistSize}`);
   csvRows.push('');
-  
+
   // Performance Metrics
   if (stats.performance) {
     csvRows.push('Performance Metrics');
@@ -1274,12 +1274,26 @@ app.get('/api/settings', requireAuth, (c) => {
     dotPort: parseInt(dbSettings.get('dotPort', '853'), 10),
     dotCertPath: dbSettings.get('dotCertPath', ''),
     dotKeyPath: dbSettings.get('dotKeyPath', ''),
+    doqEnabled: dbSettings.get('doqEnabled', 'false') === 'true',
+    doqPort: parseInt(dbSettings.get('doqPort', '853'), 10),
+    doqCertPath: dbSettings.get('doqCertPath', dbSettings.get('dotCertPath', '')),
+    doqKeyPath: dbSettings.get('doqKeyPath', dbSettings.get('dotKeyPath', '')),
+    doqSupported: (() => {
+      const nodeVersion = process.version;
+      const nodeMajorVersion = parseInt(nodeVersion.slice(1).split('.')[0], 10);
+      return nodeMajorVersion >= 25;
+    })(),
+    nodeVersion: process.version,
     dnssecValidation: dbSettings.get('dnssecValidation', 'false') === 'true',
     dnssecChainValidation: dbSettings.get('dnssecChainValidation', 'false') === 'true',
   });
 });
 
 app.put('/api/settings', requireAuth, async (c) => {
+  const nodeVersion = process.version;
+  const nodeMajorVersion = parseInt(nodeVersion.slice(1).split('.')[0], 10);
+  const doqSupported = nodeMajorVersion >= 25;
+
   const {
     upstreamDNS,
     queryRetentionDays,
@@ -1295,9 +1309,21 @@ app.put('/api/settings', requireAuth, async (c) => {
     dotPort,
     dotCertPath,
     dotKeyPath,
+    doqEnabled,
+    doqPort,
+    doqCertPath,
+    doqKeyPath,
     dnssecValidation,
     dnssecChainValidation,
   } = await c.req.json();
+
+  // Force disable DoQ if Node.js version is too old
+  if (!doqSupported && doqEnabled) {
+    logger.warn('DoQ cannot be enabled - Node.js 25+ required', {
+      currentVersion: nodeVersion,
+      requiredVersion: '25.0.0',
+    });
+  }
 
   if (upstreamDNS && typeof upstreamDNS === 'string') {
     dnsServer.setUpstreamDNS(upstreamDNS);
@@ -1388,6 +1414,60 @@ app.put('/api/settings', requireAuth, async (c) => {
 
   if (typeof dnssecChainValidation === 'boolean') {
     dbSettings.set('dnssecChainValidation', dnssecChainValidation.toString());
+  }
+
+  // Track if DoQ settings changed
+  let doqSettingsChanged = false;
+  const previousDoqEnabled = dbSettings.get('doqEnabled', 'false') === 'true';
+  const previousDoqPort = parseInt(dbSettings.get('doqPort', '853'), 10);
+  const previousDoqCertPath = dbSettings.get('doqCertPath', dbSettings.get('dotCertPath', ''));
+  const previousDoqKeyPath = dbSettings.get('doqKeyPath', dbSettings.get('dotKeyPath', ''));
+
+  if (typeof doqEnabled === 'boolean') {
+    // Only allow enabling DoQ if Node.js 25+ is available
+    const newDoqEnabled = doqSupported ? doqEnabled : false;
+    if (newDoqEnabled !== previousDoqEnabled) {
+      doqSettingsChanged = true;
+      logger.info('DoQ enabled changed', { previous: previousDoqEnabled, current: newDoqEnabled });
+    }
+    dbSettings.set('doqEnabled', newDoqEnabled.toString());
+  }
+
+  if (doqPort && typeof doqPort === 'number' && doqPort > 0) {
+    if (doqPort !== previousDoqPort) {
+      doqSettingsChanged = true;
+      logger.info('DoQ port changed', { previous: previousDoqPort, current: doqPort });
+    }
+    dbSettings.set('doqPort', doqPort.toString());
+  }
+
+  if (doqCertPath && typeof doqCertPath === 'string') {
+    if (doqCertPath !== previousDoqCertPath) {
+      doqSettingsChanged = true;
+      logger.info('DoQ cert path changed', { previous: previousDoqCertPath, current: doqCertPath });
+    }
+    dbSettings.set('doqCertPath', doqCertPath);
+  }
+
+  if (doqKeyPath && typeof doqKeyPath === 'string') {
+    if (doqKeyPath !== previousDoqKeyPath) {
+      doqSettingsChanged = true;
+      logger.info('DoQ key path changed', { previous: previousDoqKeyPath, current: doqKeyPath });
+    }
+    dbSettings.set('doqKeyPath', doqKeyPath);
+  }
+
+  // Restart DoQ server if settings changed
+  if (doqSettingsChanged) {
+    logger.info('Restarting DoQ server due to settings change...');
+    try {
+      await dnsServer.restartDoQ();
+      logger.info('DoQ server restarted with new settings');
+    } catch (error) {
+      logger.error('Failed to restart DoQ server', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
   }
 
   // Restart DoT server if settings changed

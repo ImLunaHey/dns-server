@@ -72,6 +72,10 @@ const settingsSchema = z.object({
   dotPort: z.number().int().min(1).max(65535).optional(),
   dotCertPath: z.string().optional(),
   dotKeyPath: z.string().optional(),
+  doqEnabled: z.boolean().optional(),
+  doqPort: z.number().int().min(1).max(65535).optional(),
+  doqCertPath: z.string().optional(),
+  doqKeyPath: z.string().optional(),
   dnssecValidation: z.boolean().optional(),
   dnssecChainValidation: z.boolean().optional(),
 });
@@ -133,6 +137,12 @@ export function Settings() {
         dotPort: settings.dotPort ?? 853,
         dotCertPath: settings.dotCertPath ?? "",
         dotKeyPath: settings.dotKeyPath ?? "",
+        doqEnabled:
+          Boolean(settings.doqEnabled ?? false) &&
+          (settings.doqSupported ?? false),
+        doqPort: settings.doqPort ?? 853,
+        doqCertPath: settings.doqCertPath ?? settings.dotCertPath ?? "",
+        doqKeyPath: settings.doqKeyPath ?? settings.dotKeyPath ?? "",
         dnssecValidation: Boolean(settings.dnssecValidation ?? false),
         dnssecChainValidation: Boolean(settings.dnssecChainValidation ?? false),
       });
@@ -709,6 +719,131 @@ export function Settings() {
             </div>
           </Panel>
 
+          {/* DNS-over-QUIC (DoQ) Settings */}
+          <Panel>
+            <h2 className="text-xl font-semibold text-white mb-6">
+              DNS-over-QUIC (DoQ) Settings
+            </h2>
+
+            <div className="space-y-4">
+              {!settings?.doqSupported && (
+                <div className="bg-yellow-900/20 border border-yellow-700 rounded-lg p-3 mb-4">
+                  <p className="text-xs text-yellow-300">
+                    <strong>DoQ not available:</strong> DoQ requires Node.js
+                    25+.
+                    {settings?.nodeVersion && (
+                      <>
+                        {" "}
+                        Current version:{" "}
+                        <code className="bg-yellow-900/50 px-1 rounded">
+                          {settings.nodeVersion}
+                        </code>
+                      </>
+                    )}
+                  </p>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Enable DNS-over-QUIC
+                  </label>
+                  <p className="text-xs text-gray-400">
+                    Enable encrypted DNS over QUIC protocol (RFC 9250)
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    {...register("doqEnabled", {
+                      onChange: (e) =>
+                        setValue("doqEnabled", Boolean(e.target.checked)),
+                    })}
+                    disabled={!settings?.doqSupported}
+                    className="sr-only peer disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
+                  <div
+                    className={cn(
+                      "w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600",
+                      !settings?.doqSupported && "opacity-50 cursor-not-allowed"
+                    )}
+                  ></div>
+                </label>
+              </div>
+
+              {watch("doqEnabled") && settings?.doqSupported && (
+                <>
+                  <FormField label="DoQ Port" error={errors.doqPort?.message}>
+                    <input
+                      type="number"
+                      {...register("doqPort", {
+                        valueAsNumber: true,
+                      })}
+                      min="1"
+                      max="65535"
+                      className={cn(
+                        "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
+                        "focus:outline-none focus:ring-2 focus:ring-blue-500",
+                        errors.doqPort && "border-red-500"
+                      )}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      Port for DNS-over-QUIC (default: 853, same as DoT)
+                    </p>
+                  </FormField>
+
+                  <FormField
+                    label="Certificate Path (optional)"
+                    error={errors.doqCertPath?.message}
+                  >
+                    <input
+                      type="text"
+                      {...register("doqCertPath")}
+                      placeholder="server/certs/doq.crt (or reuse DoT cert)"
+                      className={cn(
+                        "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
+                        "focus:outline-none focus:ring-2 focus:ring-blue-500",
+                        errors.doqCertPath && "border-red-500"
+                      )}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      Path to TLS certificate file. If empty, DoT certificate
+                      will be used.
+                    </p>
+                  </FormField>
+
+                  <FormField
+                    label="Private Key Path (optional)"
+                    error={errors.doqKeyPath?.message}
+                  >
+                    <input
+                      type="text"
+                      {...register("doqKeyPath")}
+                      placeholder="server/certs/doq.key (or reuse DoT key)"
+                      className={cn(
+                        "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
+                        "focus:outline-none focus:ring-2 focus:ring-blue-500",
+                        errors.doqKeyPath && "border-red-500"
+                      )}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      Path to TLS private key file. If empty, DoT key will be
+                      used.
+                    </p>
+                  </FormField>
+
+                  <div className="bg-blue-900/20 border border-blue-700 rounded-lg p-3">
+                    <p className="text-xs text-blue-300">
+                      <strong>Note:</strong> DoQ can reuse DoT certificates if
+                      paths are left empty.
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          </Panel>
+
           {/* DNSSEC Settings */}
           <Panel>
             <h2 className="text-xl font-semibold text-white mb-6">
@@ -745,7 +880,8 @@ export function Settings() {
                       Enable Chain of Trust Validation
                     </label>
                     <p className="text-xs text-gray-400">
-                      Validate the complete chain from root to domain (requires additional DNS queries)
+                      Validate the complete chain from root to domain (requires
+                      additional DNS queries)
                     </p>
                   </div>
                   <label className="relative inline-flex items-center cursor-pointer">
@@ -753,7 +889,10 @@ export function Settings() {
                       type="checkbox"
                       {...register("dnssecChainValidation", {
                         onChange: (e) =>
-                          setValue("dnssecChainValidation", Boolean(e.target.checked)),
+                          setValue(
+                            "dnssecChainValidation",
+                            Boolean(e.target.checked)
+                          ),
                       })}
                       className="sr-only peer"
                     />
@@ -764,9 +903,10 @@ export function Settings() {
 
               <div className="bg-blue-900/20 border border-blue-700 rounded-lg p-3">
                 <p className="text-xs text-blue-300">
-                  <strong>Note:</strong> DNSSEC validation requires responses with RRSIG records.
-                  Some upstream DNS servers validate DNSSEC but don't return raw DNSSEC records.
-                  Chain of trust validation requires additional DNS queries and may slow down responses.
+                  <strong>Note:</strong> DNSSEC validation requires responses
+                  with RRSIG records. Some upstream DNS servers validate DNSSEC
+                  but don't return raw DNSSEC records. Chain of trust validation
+                  requires additional DNS queries and may slow down responses.
                 </p>
               </div>
             </div>

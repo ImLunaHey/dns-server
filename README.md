@@ -12,6 +12,7 @@ A custom DNS server built with TypeScript that blocks ads using popular blocklis
 - 🎯 **Custom Rules**: Add or remove domains from blocklist via UI
 - 🔒 **DNS-over-HTTPS (DoH)**: RFC 8484 compliant, supports both binary and JSON formats (Cloudflare-compatible)
 - 🔐 **DNS-over-TLS (DoT)**: Encrypted DNS queries over TLS on port 853
+- 🚀 **DNS-over-QUIC (DoQ)**: Encrypted DNS over QUIC protocol (RFC 9250) - requires Node.js 25+
 - 🌐 **TCP DNS**: Full TCP support for DNS queries (RFC 1035)
 - 🛡️ **Rate Limiting**: Protect against DNS amplification attacks
 - 💾 **DNS Caching**: In-memory caching with TTL-based expiration (respects DNS response TTL)
@@ -26,6 +27,7 @@ A custom DNS server built with TypeScript that blocks ads using popular blocklis
 - **DNS Server (UDP port 53)** - Standard DNS queries
 - **DNS Server (TCP port 53)** - TCP DNS queries for large responses
 - **DNS-over-TLS (DoT) (port 853)** - Encrypted DNS over TLS
+- **DNS-over-QUIC (DoQ) (port 853)** - Encrypted DNS over QUIC (requires Node.js 25+)
 - **DNS-over-HTTPS (DoH) (port 3001)** - Encrypted DNS over HTTPS at `/dns-query`
 - **HTTP API (port 3001)** - REST API for dashboard
 
@@ -37,7 +39,7 @@ A custom DNS server built with TypeScript that blocks ads using popular blocklis
 
 ## Prerequisites
 
-- Node.js 18+ or Bun
+- Node.js 18+ (Node.js 25+ required for DoQ support)
 - Sudo/admin access (required for binding to port 53)
 
 ## Installation
@@ -47,8 +49,6 @@ A custom DNS server built with TypeScript that blocks ads using popular blocklis
 ```bash
 cd server
 npm install
-# or
-bun install
 ```
 
 ### 2. Install Client Dependencies
@@ -56,8 +56,6 @@ bun install
 ```bash
 cd client
 npm install
-# or
-bun install
 ```
 
 ## Usage
@@ -69,8 +67,6 @@ The DNS server needs to bind to port 53, which requires elevated privileges:
 ```bash
 cd server
 sudo npm run dev
-# or
-sudo bun run dev
 ```
 
 ### Running the Client
@@ -80,8 +76,6 @@ In a separate terminal:
 ```bash
 cd client
 npm run dev
-# or
-bun run dev
 ```
 
 The dashboard will be available at `http://localhost:3000`
@@ -210,6 +204,29 @@ kdig -d @localhost +tls +tls-hostname=localhost example.com A
 ```bash
 node test-dot.js example.com A
 ```
+
+### DNS-over-QUIC (DoQ)
+
+**Note:** DoQ requires Node.js 25+. The QUIC implementation is available in Node.js 25.
+
+**Using a DoQ client:**
+
+DoQ clients can be used to test DoQ queries. The server implementation follows RFC 9250 (DNS-over-QUIC).
+
+**Configuration:**
+
+1. Navigate to Settings → DNS-over-QUIC (DoQ) Settings
+2. Enable DoQ
+3. Configure port (default: 853, same as DoT)
+4. Set certificate paths (or leave empty to reuse DoT certificates)
+
+**Using the test script:**
+
+```bash
+node test-doq.js example.com A
+```
+
+Note: Full DoQ testing requires Node.js 25+ and a QUIC client library.
 
 ### DNS-over-HTTPS (DoH)
 

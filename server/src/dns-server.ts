@@ -69,6 +69,8 @@ export class DNSServer {
   private server: dgram.Socket;
   private tcpServer: net.Server;
   private dotServer: tls.Server | null = null;
+  // @ts-expect-error - QUIC is experimental in Node.js
+  private doqServer: any | null = null;
   private blocklist: Set<string> = new Set();
   private blocklistUrls: string[] = [];
   private blockingEnabled: boolean = true;
@@ -76,6 +78,7 @@ export class DNSServer {
   private upstreamDNS: string;
   private port: number;
   private dotPort: number;
+  private doqPort: number;
   private rateLimitEnabled: boolean = false;
   private rateLimitMaxQueries: number = 1000;
   private rateLimitWindowMs: number = 60000; // 1 minute
@@ -94,6 +97,7 @@ export class DNSServer {
     this.server = dgram.createSocket('udp4');
     this.tcpServer = net.createServer();
     this.dotPort = parseInt(dbSettings.get('dotPort', '853'), 10);
+    this.doqPort = parseInt(dbSettings.get('doqPort', '853'), 10);
     this.upstreamDNS = dbSettings.get('upstreamDNS', '1.1.1.1');
     this.port = parseInt(dbSettings.get('dnsPort', '53'), 10);
     this.rateLimitEnabled = dbSettings.get('rateLimitEnabled', 'false') === 'true';
@@ -1195,6 +1199,7 @@ export class DNSServer {
         udp: this.port > 0, // UDP server is considered running if port is set
         tcp: this.tcpServer.listening,
         dot: this.dotServer !== null,
+        doq: this.doqServer !== null,
         doh: true, // DoH is handled by HTTP server, always available if HTTP server is running
       },
     };
@@ -1712,6 +1717,9 @@ export class DNSServer {
     // Start DoT if enabled (optional)
     servers.push(this.startDoT());
 
+    // Start DoQ if enabled (optional, requires Node.js 25+)
+    servers.push(this.startDoQ());
+
     // Wait for all servers to start (or fail gracefully)
     await Promise.allSettled(servers);
   }
@@ -1721,6 +1729,9 @@ export class DNSServer {
     this.tcpServer.close();
     if (this.dotServer) {
       this.dotServer.close();
+    }
+    if (this.doqServer) {
+      this.doqServer.close();
     }
   }
 
@@ -1755,6 +1766,209 @@ export class DNSServer {
       await this.startDoT();
     } else {
       logger.debug('DoT is disabled, not starting server');
+    }
+  }
+
+  private async startDoQ(): Promise<void> {
+    const doqEnabled = dbSettings.get('doqEnabled', 'false') === 'true';
+    if (!doqEnabled) {
+      return Promise.resolve();
+    }
+
+    try {
+      // Check if QUIC is available (Node.js 25+)
+      // QUIC support is experimental and may not be available
+      let createQuicSocket: any;
+      try {
+        // @ts-expect-error - QUIC is experimental
+        const netModule = await import('net');
+        // @ts-expect-error - QUIC is experimental
+        createQuicSocket = netModule.createQuicSocket;
+      } catch {
+        // QUIC not available
+      }
+
+      if (!createQuicSocket) {
+        logger.warn('DoQ server disabled - QUIC not available', {
+          note: 'DoQ requires Node.js 25+',
+        });
+        return Promise.resolve();
+      }
+
+      const doqPort = parseInt(dbSettings.get('doqPort', '853'), 10);
+      const certPath = dbSettings.get('doqCertPath', dbSettings.get('dotCertPath', ''));
+      const keyPath = dbSettings.get('doqKeyPath', dbSettings.get('dotKeyPath', ''));
+
+      if (!certPath || !keyPath) {
+        logger.warn('DoQ server disabled - certificates not configured', {
+          note: 'DoQ requires TLS certificates (can reuse DoT certificates)',
+        });
+        return Promise.resolve();
+      }
+
+      const fs = await import('fs');
+      const { existsSync } = fs;
+      const { resolve, basename } = await import('path');
+
+      // Resolve certificate paths (similar to DoT)
+      let resolvedCertPath = certPath;
+      let resolvedKeyPath = keyPath;
+
+      if (certPath.startsWith('./')) {
+        resolvedCertPath = certPath.substring(2);
+      }
+      if (keyPath.startsWith('./')) {
+        resolvedKeyPath = keyPath.substring(2);
+      }
+
+      // Find project root
+      let projectRoot = process.cwd();
+      let currentDir = projectRoot;
+      let found = false;
+
+      for (let i = 0; i < 5; i++) {
+        const serverDir = resolve(currentDir, 'server');
+        const clientDir = resolve(currentDir, 'client');
+        if (existsSync(serverDir) && existsSync(clientDir)) {
+          projectRoot = currentDir;
+          found = true;
+          break;
+        }
+        const parent = resolve(currentDir, '..');
+        if (parent === currentDir) break;
+        currentDir = parent;
+      }
+
+      if (!found && basename(projectRoot) === 'server') {
+        projectRoot = resolve(projectRoot, '..');
+      }
+
+      if (!resolvedCertPath.startsWith('/')) {
+        resolvedCertPath = resolve(projectRoot, resolvedCertPath);
+      }
+      if (!resolvedKeyPath.startsWith('/')) {
+        resolvedKeyPath = resolve(projectRoot, resolvedKeyPath);
+      }
+
+      if (!existsSync(resolvedCertPath) || !existsSync(resolvedKeyPath)) {
+        logger.warn('DoQ server disabled - certificate files not found', {
+          certPath: resolvedCertPath,
+          keyPath: resolvedKeyPath,
+        });
+        return Promise.resolve();
+      }
+
+      logger.debug('Starting DoQ server', { port: doqPort });
+
+      return new Promise<void>((resolve, reject) => {
+        try {
+          // Create QUIC socket for DoQ (RFC 9250)
+          // DoQ uses the "doq" ALPN protocol identifier
+          this.doqServer = createQuicSocket({
+            endpoint: {
+              address: '0.0.0.0',
+              port: doqPort,
+            },
+            server: {
+              key: fs.readFileSync(resolvedKeyPath),
+              cert: fs.readFileSync(resolvedCertPath),
+              alpn: 'doq', // DNS-over-QUIC ALPN identifier
+            },
+          });
+
+          this.doqServer.on('session', (session: any) => {
+            // Handle new QUIC session
+            session.on('stream', (stream: any) => {
+              // DoQ uses QUIC streams to send DNS messages
+              // Each DNS message is sent as a stream
+              const clientIp = session.remote?.address || 'unknown';
+              let buffer = Buffer.alloc(0);
+
+              stream.on('data', async (data: Buffer) => {
+                buffer = Buffer.concat([buffer, data]);
+              });
+
+              stream.on('end', async () => {
+                if (buffer.length > 0) {
+                  try {
+                    const response = await this.handleDNSQuery(buffer, clientIp, false);
+                    stream.write(response);
+                    stream.end();
+                  } catch (error) {
+                    logger.error('Error handling DoQ query', {
+                      error: error instanceof Error ? error : new Error(String(error)),
+                      clientIp,
+                    });
+                    stream.end();
+                  }
+                }
+              });
+
+              stream.on('error', (err: Error) => {
+                logger.error('DoQ stream error', {
+                  error: err instanceof Error ? err : new Error(String(err)),
+                  clientIp,
+                });
+              });
+            });
+
+            session.on('error', (err: Error) => {
+              logger.error('DoQ session error', {
+                error: err instanceof Error ? err : new Error(String(err)),
+              });
+            });
+          });
+
+          this.doqServer.on('error', (err: Error) => {
+            logger.error('DoQ server error', {
+              error: err instanceof Error ? err : new Error(String(err)),
+            });
+            reject(err);
+          });
+
+          this.doqServer.on('ready', () => {
+            logger.info('DNS server (DoQ) running', { port: doqPort });
+            resolve();
+          });
+
+          this.doqServer.listen();
+        } catch (error) {
+          logger.warn('DoQ server disabled', {
+            error: error instanceof Error ? error.message : 'Unknown error',
+            note: 'DoQ requires Node.js 25+',
+          });
+          resolve(); // Don't fail startup if DoQ can't start
+        }
+      });
+    } catch (error) {
+      logger.warn('DoQ server disabled', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+        note: 'DoQ requires Node.js 20+ with --experimental-quic flag',
+      });
+      return Promise.resolve();
+    }
+  }
+
+  async stopDoQ(): Promise<void> {
+    if (this.doqServer) {
+      return new Promise<void>((resolve) => {
+        this.doqServer!.close(() => {
+          logger.info('DNS server (DoQ) stopped');
+          this.doqServer = null;
+          resolve();
+        });
+      });
+    }
+    return Promise.resolve();
+  }
+
+  async restartDoQ(): Promise<void> {
+    logger.info('Restarting DoQ server...');
+    await this.stopDoQ();
+    const doqEnabled = dbSettings.get('doqEnabled', 'false') === 'true';
+    if (doqEnabled) {
+      this.doqPort = parseInt(dbSettings.get('doqPort', '853'), 10);
+      await this.startDoQ();
     }
   }
 }
