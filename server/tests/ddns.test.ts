@@ -25,7 +25,7 @@ describe('Dynamic DNS (DDNS) Support', () => {
 
     it('should retrieve TSIG key by name', () => {
       dbTSIGKeys.create('test-key', 'hmac-sha256', 'test-secret');
-      
+
       const key = dbTSIGKeys.getByName('test-key');
       expect(key).not.toBeNull();
       expect(key?.name).toBe('test-key');
@@ -51,7 +51,7 @@ describe('Dynamic DNS (DDNS) Support', () => {
 
     it('should enable/disable TSIG keys', () => {
       const keyId = dbTSIGKeys.create('test-key', 'hmac-sha256', 'test-secret');
-      
+
       dbTSIGKeys.setEnabled(keyId, false);
       expect(dbTSIGKeys.getByName('test-key')).toBeNull();
 
@@ -61,9 +61,9 @@ describe('Dynamic DNS (DDNS) Support', () => {
 
     it('should delete TSIG keys', () => {
       const keyId = dbTSIGKeys.create('test-key', 'hmac-sha256', 'test-secret');
-      
+
       dbTSIGKeys.delete(keyId);
-      
+
       const key = dbTSIGKeys.getByName('test-key');
       expect(key).toBeNull();
     });
@@ -89,4 +89,3 @@ describe('Dynamic DNS (DDNS) Support', () => {
     });
   });
 });
-
