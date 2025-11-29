@@ -28,8 +28,6 @@ import {
 import db from './db.js';
 import { auth } from './auth.js';
 import { requireAuth } from './middleware.js';
-import dns from 'dns';
-import { promisify } from 'util';
 
 const app = new Hono();
 const dnsServer = new DNSServer();
@@ -629,6 +627,49 @@ app.options('/dns-query', (c) => {
 // Public API Routes (no auth required)
 app.get('/api/stats', (c) => {
   return c.json(dnsServer.getStats());
+});
+
+// Test DNS query endpoint
+app.post('/api/dns/test', requireAuth, async (c) => {
+  try {
+    const { domain, type, dnssec } = await c.req.json();
+
+    if (!domain || typeof domain !== 'string') {
+      return c.json({ error: 'Domain is required' }, 400);
+    }
+
+    const queryType = type || 'A';
+    const wantsDNSSEC = dnssec === true;
+
+    // Create DNS query
+    const dnsQuery = createDNSQueryFromParams(domain, queryType, wantsDNSSEC);
+
+    // Handle the query (use a test client IP)
+    const startTime = Date.now();
+    const response = await dnsServer.handleDNSQuery(dnsQuery, '127.0.0.1', false);
+    const responseTime = Date.now() - startTime;
+
+    // Parse response to JSON
+    const jsonResponse = parseDNSResponseToJSON(response, domain, queryType);
+
+    return c.json({
+      success: true,
+      domain,
+      type: queryType,
+      responseTime,
+      response: jsonResponse,
+      rawResponse: response.toString('base64'),
+    });
+  } catch (error) {
+    console.error('DNS test error:', error);
+    return c.json(
+      {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to process DNS query',
+      },
+      500,
+    );
+  }
 });
 
 // Export statistics as CSV
@@ -1717,10 +1758,6 @@ app.delete('/api/groups/:id/blocklist/:domain', requireAuth, (c) => {
 });
 
 // Tools - DNS Lookup
-const resolve4 = promisify(dns.resolve4);
-const resolve6 = promisify(dns.resolve6);
-const reverse = promisify(dns.reverse);
-
 app.get('/api/tools/lookup', async (c) => {
   const domain = c.req.query('domain');
   const type = c.req.query('type') || 'A';
@@ -1730,18 +1767,50 @@ app.get('/api/tools/lookup', async (c) => {
   }
 
   try {
-    if (type === 'A') {
-      const addresses = await resolve4(domain);
-      return c.json({ domain, type, addresses });
-    } else if (type === 'AAAA') {
-      const addresses = await resolve6(domain);
-      return c.json({ domain, type, addresses });
+    // Create DNS query
+    const dnsQuery = createDNSQueryFromParams(domain, type, false);
+
+    // Handle the query (use a test client IP)
+    const response = await dnsServer.handleDNSQuery(dnsQuery, '127.0.0.1', false);
+
+    // Parse response to JSON
+    const jsonResponse = parseDNSResponseToJSON(response, domain, type) as {
+      Status: number;
+      Question?: Array<{ name: string; type: number }>;
+      Answer?: Array<{ name: string; type: number; TTL: number; data: string }>;
+      Authority?: Array<{ name: string; type: number; TTL: number; data: string }>;
+      Additional?: Array<{ name: string; type: number; TTL: number; data: string }>;
+    };
+
+    // For backward compatibility, extract addresses/hostnames for A/AAAA/PTR
+    const addresses: string[] = [];
+    const hostnames: string[] = [];
+    const answers = jsonResponse.Answer || [];
+
+    if (type === 'A' || type === 'AAAA') {
+      answers.forEach((answer) => {
+        if (answer.type === 1 || answer.type === 28) {
+          addresses.push(answer.data);
+        }
+      });
     } else if (type === 'PTR') {
-      const hostnames = await reverse(domain);
-      return c.json({ domain, type, hostnames });
-    } else {
-      return c.json({ error: 'Unsupported type. Use A, AAAA, or PTR' }, 400);
+      answers.forEach((answer) => {
+        if (answer.type === 12) {
+          hostnames.push(answer.data);
+        }
+      });
     }
+
+    return c.json({
+      domain,
+      type,
+      addresses: addresses.length > 0 ? addresses : undefined,
+      hostnames: hostnames.length > 0 ? hostnames : undefined,
+      answers: answers.length > 0 ? answers : undefined,
+      authority: jsonResponse.Authority,
+      additional: jsonResponse.Additional,
+      status: jsonResponse.Status,
+    });
   } catch (error) {
     return c.json({ error: (error as Error).message }, 400);
   }

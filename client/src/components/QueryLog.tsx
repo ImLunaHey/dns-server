@@ -8,9 +8,10 @@ interface QueryLogProps {
   clientNames?: Record<string, string>;
   onBlock: (domain: string) => void;
   onAllow: (domain: string) => void;
+  onReplay?: (domain: string, type: string) => void;
 }
 
-export function QueryLog({ queries, clientNames = {}, onBlock, onAllow }: QueryLogProps) {
+export function QueryLog({ queries, clientNames = {}, onBlock, onAllow, onReplay }: QueryLogProps) {
   const formatRelativeTime = (timestamp: number): string => {
     const now = Date.now();
     const diff = now - timestamp;
@@ -82,8 +83,19 @@ export function QueryLog({ queries, clientNames = {}, onBlock, onAllow }: QueryL
             header: "Domain",
             accessor: (row) => (
               <>
-                <div className="min-w-[120px] max-w-[180px] sm:max-w-[250px] md:max-w-none truncate text-sm text-gray-800 dark:text-gray-200 font-mono">
-                  {row.domain}
+                <div className="flex items-center gap-2">
+                  <div className="min-w-[120px] max-w-[180px] sm:max-w-[250px] md:max-w-none truncate text-sm text-gray-800 dark:text-gray-200 font-mono">
+                    {row.domain}
+                  </div>
+                  {onReplay && (
+                    <button
+                      onClick={() => onReplay(row.domain, row.type)}
+                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap"
+                      title="Replay this query"
+                    >
+                      Replay
+                    </button>
+                  )}
                 </div>
                 {/* Show host on mobile */}
                 <div className="sm:hidden mt-1 text-xs text-gray-600 dark:text-gray-400">

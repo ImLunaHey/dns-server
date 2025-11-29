@@ -81,6 +81,31 @@ export const api = {
     return response.blob();
   },
 
+  async testDNSQuery(domain: string, type: string = 'A', dnssec: boolean = false): Promise<{
+    success: boolean;
+    domain: string;
+    type: string;
+    responseTime: number;
+    response: unknown;
+    rawResponse?: string;
+    error?: string;
+  }> {
+    const response = await fetch(`${API_URL}/api/dns/test`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ domain, type, dnssec }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || `Failed to test DNS query: ${response.statusText}`);
+    }
+
+    return response.json();
+  },
+
   async getHealth(): Promise<ServerHealth> {
     const response = await fetch(`${API_URL}/api/health`);
     if (!response.ok) {
@@ -556,12 +581,16 @@ export const api = {
 
   async lookupDNS(
     domain: string,
-    type: "A" | "AAAA" | "PTR" = "A"
+    type: "A" | "AAAA" | "PTR" | "MX" | "TXT" | "CNAME" | "NS" | "SRV" | "SOA" = "A"
   ): Promise<{
     domain: string;
     type: string;
     addresses?: string[];
     hostnames?: string[];
+    answers?: Array<{ name: string; type: number; data: string }>;
+    authority?: Array<{ name: string; type: number; TTL: number; data: string }>;
+    additional?: Array<{ name: string; type: number; TTL: number; data: string }>;
+    status?: number;
   }> {
     const response = await fetch(
       `${API_URL}/api/tools/lookup?domain=${encodeURIComponent(
