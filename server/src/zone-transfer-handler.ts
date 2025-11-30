@@ -38,6 +38,7 @@ export function handleAXFR(zoneId: number, queryId: number): Buffer[] {
       SOA: 6,
       PTR: 12,
       SRV: 33,
+      CAA: 257,
     };
 
     // First response: SOA record
@@ -183,6 +184,7 @@ function createZoneTransferRecord(
     SOA: 6,
     PTR: 12,
     SRV: 33,
+    CAA: 257,
   };
   response.writeUInt16BE(typeMap[type.toUpperCase()] || 1, offset);
   offset += 2;
@@ -227,48 +229,68 @@ function createZoneTransferRecord(
     dataBytes = Buffer.concat([Buffer.from([txtData.length]), txtData]);
   } else if (type === 'NS' || type === 'CNAME') {
     dataBytes = domainToBytes(data);
-  } else if (type === 'SOA') {
-    const parts = data.split(' ');
-    if (parts.length >= 7) {
-      const mname = domainToBytes(parts[0]);
-      const rname = domainToBytes(parts[1]);
-      const serial = parseInt(parts[2], 10);
-      const refresh = parseInt(parts[3], 10);
-      const retry = parseInt(parts[4], 10);
-      const expire = parseInt(parts[5], 10);
-      const minimum = parseInt(parts[6], 10);
-      dataBytes = Buffer.concat([
-        mname,
-        rname,
-        Buffer.from([
-          (serial >> 24) & 0xff,
-          (serial >> 16) & 0xff,
-          (serial >> 8) & 0xff,
-          serial & 0xff,
-          (refresh >> 24) & 0xff,
-          (refresh >> 16) & 0xff,
-          (refresh >> 8) & 0xff,
-          refresh & 0xff,
-          (retry >> 24) & 0xff,
-          (retry >> 16) & 0xff,
-          (retry >> 8) & 0xff,
-          retry & 0xff,
-          (expire >> 24) & 0xff,
-          (expire >> 16) & 0xff,
-          (expire >> 8) & 0xff,
-          expire & 0xff,
-          (minimum >> 24) & 0xff,
-          (minimum >> 16) & 0xff,
-          (minimum >> 8) & 0xff,
-          minimum & 0xff,
-        ]),
-      ]);
+    } else if (type === 'SOA') {
+      const parts = data.split(' ');
+      if (parts.length >= 7) {
+        const mname = domainToBytes(parts[0]);
+        const rname = domainToBytes(parts[1]);
+        const serial = parseInt(parts[2], 10);
+        const refresh = parseInt(parts[3], 10);
+        const retry = parseInt(parts[4], 10);
+        const expire = parseInt(parts[5], 10);
+        const minimum = parseInt(parts[6], 10);
+        dataBytes = Buffer.concat([
+          mname,
+          rname,
+          Buffer.from([
+            (serial >> 24) & 0xff,
+            (serial >> 16) & 0xff,
+            (serial >> 8) & 0xff,
+            serial & 0xff,
+            (refresh >> 24) & 0xff,
+            (refresh >> 16) & 0xff,
+            (refresh >> 8) & 0xff,
+            refresh & 0xff,
+            (retry >> 24) & 0xff,
+            (retry >> 16) & 0xff,
+            (retry >> 8) & 0xff,
+            retry & 0xff,
+            (expire >> 24) & 0xff,
+            (expire >> 16) & 0xff,
+            (expire >> 8) & 0xff,
+            expire & 0xff,
+            (minimum >> 24) & 0xff,
+            (minimum >> 16) & 0xff,
+            (minimum >> 8) & 0xff,
+            minimum & 0xff,
+          ]),
+        ]);
+      } else {
+        dataBytes = Buffer.from(data, 'utf8');
+      }
+    } else if (type === 'CAA') {
+      // CAA record format: flags (1 byte) + tag length (1 byte) + tag + value
+      // Data format: "flags tag value" or "0 issue letsencrypt.org"
+      const parts = data.split(' ');
+      if (parts.length >= 3) {
+        const flags = parseInt(parts[0], 10) || 0;
+        const tag = parts[1];
+        const value = parts.slice(2).join(' ');
+        const tagBytes = Buffer.from(tag, 'utf8');
+        const valueBytes = Buffer.from(value, 'utf8');
+        dataBytes = Buffer.concat([
+          Buffer.from([flags & 0xff]),
+          Buffer.from([tagBytes.length]),
+          tagBytes,
+          valueBytes,
+        ]);
+      } else {
+        // Fallback: treat as raw data
+        dataBytes = Buffer.from(data, 'utf8');
+      }
     } else {
       dataBytes = Buffer.from(data, 'utf8');
     }
-  } else {
-    dataBytes = Buffer.from(data, 'utf8');
-  }
 
   // Write data length
   response.writeUInt16BE(dataBytes.length, dataStart);

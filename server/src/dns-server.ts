@@ -942,6 +942,7 @@ export class DNSServer {
       SOA: 6,
       PTR: 12,
       SRV: 33,
+      CAA: 257,
     };
 
     const typeName = Object.keys(typeMap).find((k) => typeMap[k] === queryType) || 'A';
@@ -1047,6 +1048,7 @@ export class DNSServer {
           SOA: 6,
           PTR: 12,
           SRV: 33,
+          CAA: 257,
         };
         const recordType = typeMap[record.type] || 1;
 
@@ -1163,6 +1165,7 @@ export class DNSServer {
       SOA: 6,
       PTR: 12,
       SRV: 33,
+      CAA: 257,
     };
     response.writeUInt16BE(typeMap[type.toUpperCase()] || 1, offset);
     offset += 2;
@@ -1229,6 +1232,26 @@ export class DNSServer {
           ]),
         ]);
       } else {
+        dataBytes = Buffer.from(data, 'utf8');
+      }
+    } else if (type === 'CAA') {
+      // CAA record format: flags (1 byte) + tag length (1 byte) + tag + value
+      // Data format: "flags tag value" or "0 issue letsencrypt.org"
+      const parts = data.split(' ');
+      if (parts.length >= 3) {
+        const flags = parseInt(parts[0], 10) || 0;
+        const tag = parts[1];
+        const value = parts.slice(2).join(' ');
+        const tagBytes = Buffer.from(tag, 'utf8');
+        const valueBytes = Buffer.from(value, 'utf8');
+        dataBytes = Buffer.concat([
+          Buffer.from([flags & 0xff]),
+          Buffer.from([tagBytes.length]),
+          tagBytes,
+          valueBytes,
+        ]);
+      } else {
+        // Fallback: treat as raw data
         dataBytes = Buffer.from(data, 'utf8');
       }
     } else {
