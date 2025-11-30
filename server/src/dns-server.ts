@@ -41,6 +41,7 @@ export interface DNSQuery {
   clientIp?: string;
   blockReason?: string; // e.g., "blocklist", "regex", "client-blocklist", "group-blocklist"
   cached?: boolean; // Whether this query was served from cache
+  rcode?: number; // DNS response code: 0=NOERROR, 1=FORMERR, 2=SERVFAIL, 3=NXDOMAIN, etc.
 }
 
 export interface DNSStats {
@@ -2246,6 +2247,10 @@ export class DNSServer {
       }
     }
 
+    // Extract rcode from response (lower 4 bits of flags field)
+    const responseFlags = response.readUInt16BE(2);
+    const rcode = responseFlags & 0x0f;
+
     const query: DNSQuery = {
       id: queryId,
       domain,
@@ -2256,6 +2261,7 @@ export class DNSServer {
       blockReason: blockResult.reason,
       cached: isCached,
       responseTime: Date.now() - startTime,
+      rcode,
     };
 
     this.addQuery(query);

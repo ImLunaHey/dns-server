@@ -22,7 +22,8 @@ db.exec(`
     responseTime INTEGER,
     clientIp TEXT,
     blockReason TEXT,
-    cached INTEGER DEFAULT 0
+    cached INTEGER DEFAULT 0,
+    rcode INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS client_names (
@@ -384,8 +385,8 @@ export const dbQueries = {
     const clientIp = privacyMode ? null : query.clientIp ?? null;
 
     const stmt = db.prepare(`
-      INSERT INTO queries (id, domain, type, blocked, timestamp, responseTime, clientIp, blockReason, cached)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO queries (id, domain, type, blocked, timestamp, responseTime, clientIp, blockReason, cached, rcode)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       query.id,
@@ -397,12 +398,13 @@ export const dbQueries = {
       clientIp,
       query.blockReason ?? null,
       query.cached ? 1 : 0,
+      query.rcode ?? null,
     );
   },
 
   getRecent(limit: number = 100): DNSQuery[] {
     const stmt = db.prepare(`
-      SELECT id, domain, type, blocked, timestamp, responseTime, clientIp, blockReason, cached
+      SELECT id, domain, type, blocked, timestamp, responseTime, clientIp, blockReason, cached, rcode
       FROM queries
       ORDER BY timestamp DESC
       LIMIT ?
@@ -417,6 +419,7 @@ export const dbQueries = {
       clientIp: string | null;
       blockReason: string | null;
       cached: number;
+      rcode: number | null;
     }>;
 
     const privacyMode = dbSettings.get('privacyMode', 'false') === 'true';
@@ -431,6 +434,7 @@ export const dbQueries = {
       clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
       blockReason: row.blockReason ?? undefined,
       cached: row.cached === 1,
+      rcode: row.rcode ?? undefined,
     }));
   },
 
@@ -456,6 +460,7 @@ export const dbQueries = {
       clientIp: string | null;
       blockReason: string | null;
       cached: number;
+      rcode: number | null;
     }>;
 
     return rows.map((row) => ({
@@ -468,6 +473,7 @@ export const dbQueries = {
       clientIp: row.clientIp ?? undefined,
       blockReason: row.blockReason ?? undefined,
       cached: row.cached === 1,
+      rcode: row.rcode ?? undefined,
     }));
   },
 
@@ -487,6 +493,7 @@ export const dbQueries = {
       clientIp: string | null;
       blockReason: string | null;
       cached: number;
+      rcode: number | null;
     }>;
 
     const privacyMode = dbSettings.get('privacyMode', 'false') === 'true';
@@ -501,6 +508,7 @@ export const dbQueries = {
       clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
       blockReason: row.blockReason ?? undefined,
       cached: row.cached === 1,
+      rcode: row.rcode ?? undefined,
     }));
   },
 
@@ -607,6 +615,7 @@ export const dbQueries = {
       clientIp: string | null;
       blockReason: string | null;
       cached: number;
+      rcode: number | null;
     }>;
 
     const privacyMode = dbSettings.get('privacyMode', 'false') === 'true';
@@ -621,6 +630,7 @@ export const dbQueries = {
       clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
       blockReason: row.blockReason ?? undefined,
       cached: row.cached === 1,
+      rcode: row.rcode ?? undefined,
     }));
   },
 
@@ -714,6 +724,7 @@ export const dbQueries = {
       clientIp: string | null;
       blockReason: string | null;
       cached: number;
+      rcode: number | null;
     }>;
 
     const privacyMode = dbSettings.get('privacyMode', 'false') === 'true';
@@ -728,6 +739,7 @@ export const dbQueries = {
       clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
       blockReason: row.blockReason ?? undefined,
       cached: row.cached === 1,
+      rcode: row.rcode ?? undefined,
     }));
   },
 
