@@ -349,6 +349,120 @@ function nsecCoversDomain(nsec: NSECRecord, domain: string, nsecOwner: string): 
 }
 
 /**
+ * Compute NSEC3 hash (RFC 5155)
+ * Uses SHA-1 for hash algorithm 1
+ * The hash is computed on the domain name in wire format (binary)
+ */
+function computeNSEC3Hash(domain: string, salt: Buffer, iterations: number, hashAlgorithm: number): Buffer {
+  // Only support SHA-1 (algorithm 1) for now
+  if (hashAlgorithm !== 1) {
+    throw new Error(`Unsupported NSEC3 hash algorithm: ${hashAlgorithm}`);
+  }
+
+  // Convert domain name to wire format (binary)
+  // Format: <length><label><length><label>...<0>
+  const labels = domain.toLowerCase().replace(/\.$/, '').split('.');
+  const wireFormat: number[] = [];
+  for (const label of labels) {
+    if (label.length > 63) {
+      throw new Error(`Label too long: ${label}`);
+    }
+    wireFormat.push(label.length);
+    for (let i = 0; i < label.length; i++) {
+      wireFormat.push(label.charCodeAt(i));
+    }
+  }
+  wireFormat.push(0); // Null terminator
+  const domainWire = Buffer.from(wireFormat);
+
+  // Initial hash: SHA-1(domain_wire || salt)
+  let hash = crypto.createHash('sha1').update(domainWire).update(salt).digest();
+
+  // Additional iterations: SHA-1(hash || salt) for each iteration
+  for (let i = 0; i < iterations; i++) {
+    hash = crypto.createHash('sha1').update(hash).update(salt).digest();
+  }
+
+  return hash;
+}
+
+/**
+ * Check if a domain name is covered by NSEC3 record
+ * NSEC3 uses hashed domain names, so we need to hash the queried domain and check if it's covered
+ */
+function nsec3CoversDomain(nsec3: NSEC3Record, queriedDomain: string, nsec3OwnerName: string, zoneName: string): boolean {
+  try {
+    // Compute hash of queried domain
+    const queriedHash = computeNSEC3Hash(queriedDomain, nsec3.salt, nsec3.iterations, nsec3.hashAlgorithm);
+
+    // The NSEC3 owner name is base32hex encoded hash
+    // The owner name format is: <base32hex-hash>.<zone>
+    const ownerHashPart = nsec3OwnerName.split('.')[0];
+    const ownerHash = base32HexDecode(ownerHashPart);
+
+    // Ensure all hashes are the same length (SHA-1 = 20 bytes)
+    if (queriedHash.length !== ownerHash.length || queriedHash.length !== nsec3.nextHashedOwnerName.length) {
+      return false;
+    }
+
+    // Compare hashes byte by byte (canonical ordering)
+    const queriedHashInt = bufferToBigInt(queriedHash);
+    const ownerHashInt = bufferToBigInt(ownerHash);
+    const nextHashInt = bufferToBigInt(nsec3.nextHashedOwnerName);
+
+    // Check if queried hash is between owner and next (with wrap-around)
+    if (nextHashInt < ownerHashInt) {
+      // Wrap around: queried > owner OR queried < next
+      return queriedHashInt > ownerHashInt || queriedHashInt < nextHashInt;
+    } else {
+      // Normal case: owner < queried < next
+      return queriedHashInt > ownerHashInt && queriedHashInt < nextHashInt;
+    }
+  } catch (error) {
+    logger.debug('Error checking NSEC3 coverage', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return false;
+  }
+}
+
+/**
+ * Decode base32hex string to buffer (RFC 4648)
+ */
+function base32HexDecode(encoded: string): Buffer {
+  const base32HexChars = '0123456789ABCDEFGHIJKLMNOPQRSTUV';
+  const result: number[] = [];
+  let bits = 0;
+  let value = 0;
+
+  for (const char of encoded.toUpperCase()) {
+    const index = base32HexChars.indexOf(char);
+    if (index === -1) continue;
+
+    value = (value << 5) | index;
+    bits += 5;
+
+    if (bits >= 8) {
+      result.push((value >> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+
+  return Buffer.from(result);
+}
+
+/**
+ * Convert buffer to big integer for comparison
+ */
+function bufferToBigInt(buffer: Buffer): bigint {
+  let result = 0n;
+  for (let i = 0; i < buffer.length; i++) {
+    result = (result << 8n) | BigInt(buffer[i]);
+  }
+  return result;
+}
+
+/**
  * Validate NSEC/NSEC3 records for authenticated denial
  */
 function validateNSECDenial(
@@ -360,50 +474,105 @@ function validateNSECDenial(
   response: Buffer,
 ): boolean {
   try {
-    // Find NSEC records that cover the queried domain
-    const coveringNSEC = nsecRecords
-      .filter((rr) => rr.type === NSEC)
-      .map((rr) => {
-        // Parse NSEC data
-        const nsec = parseNSEC(rr.data, response, 0);
-        return nsec ? { record: rr, nsec } : null;
-      })
-      .filter((item): item is { record: ResourceRecord; nsec: NSECRecord } => item !== null)
-      .filter((item) => nsecCoversDomain(item.nsec, queriedDomain, item.record.name));
+    // Separate NSEC and NSEC3 records
+    const nsecOnly = nsecRecords.filter((rr) => rr.type === NSEC);
+    const nsec3Only = nsecRecords.filter((rr) => rr.type === NSEC3);
 
-    if (coveringNSEC.length === 0) {
-      return false;
+    // Try NSEC validation first
+    if (nsecOnly.length > 0) {
+      const coveringNSEC = nsecOnly
+        .map((rr) => {
+          // Parse NSEC data
+          const nsec = parseNSEC(rr.data, response, 0);
+          return nsec ? { record: rr, nsec } : null;
+        })
+        .filter((item): item is { record: ResourceRecord; nsec: NSECRecord } => item !== null)
+        .filter((item) => nsecCoversDomain(item.nsec, queriedDomain, item.record.name));
+
+      if (coveringNSEC.length > 0) {
+        // Verify RRSIG signatures on NSEC records
+        for (const { record, nsec } of coveringNSEC) {
+          // Find RRSIG covering this NSEC
+          const nsecRRSIGs = rrsigs.filter((rrsig) => rrsig.typeCovered === NSEC);
+
+          for (const rrsig of nsecRRSIGs) {
+            // Find matching DNSKEY
+            const matchingDNSKEY = dnskeyRecords.find((key) => {
+              const keyTag = calculateKeyTag(key);
+              return keyTag === rrsig.keyTag;
+            });
+
+            if (!matchingDNSKEY) continue;
+
+            // Check signature validity
+            const now = Math.floor(Date.now() / 1000);
+            if (now < rrsig.inception || now > rrsig.expiration) continue;
+
+            // Build canonical RRset for NSEC
+            const nsecRRset = buildCanonicalRRset([record], rrsig, response);
+            const rrsigData = buildRRSIGData(rrsig);
+
+            // Verify signature
+            if (verifySignature(nsecRRset, rrsigData, rrsig.signature, matchingDNSKEY)) {
+              // Check if queried type is in the type bitmap (if so, record exists, not a denial)
+              if (nsec.typeBitMap.includes(queriedType)) {
+                return false; // Type exists, not a denial
+              }
+              return true; // Valid authenticated denial
+            }
+          }
+        }
+      }
     }
 
-    // Verify RRSIG signatures on NSEC records
-    for (const { record, nsec } of coveringNSEC) {
-      // Find RRSIG covering this NSEC
-      const nsecRRSIGs = rrsigs.filter((rrsig) => rrsig.typeCovered === NSEC);
+    // Try NSEC3 validation if NSEC didn't work
+    if (nsec3Only.length > 0) {
+      // Extract zone name from NSEC3 owner name (format: <hash>.<zone>)
+      const nsec3Record = nsec3Only[0];
+      const ownerParts = nsec3Record.name.split('.');
+      const zoneName = ownerParts.slice(1).join('.');
 
-      for (const rrsig of nsecRRSIGs) {
-        // Find matching DNSKEY
-        const matchingDNSKEY = dnskeyRecords.find((key) => {
-          const keyTag = calculateKeyTag(key);
-          return keyTag === rrsig.keyTag;
-        });
+      const coveringNSEC3 = nsec3Only
+        .map((rr) => {
+          // Parse NSEC3 data
+          const nsec3 = parseNSEC3(rr.data);
+          return nsec3 ? { record: rr, nsec3 } : null;
+        })
+        .filter((item): item is { record: ResourceRecord; nsec3: NSEC3Record } => item !== null)
+        .filter((item) => nsec3CoversDomain(item.nsec3, queriedDomain, item.record.name, zoneName));
 
-        if (!matchingDNSKEY) continue;
+      if (coveringNSEC3.length > 0) {
+        // Verify RRSIG signatures on NSEC3 records
+        for (const { record, nsec3 } of coveringNSEC3) {
+          // Find RRSIG covering this NSEC3
+          const nsec3RRSIGs = rrsigs.filter((rrsig) => rrsig.typeCovered === NSEC3);
 
-        // Check signature validity
-        const now = Math.floor(Date.now() / 1000);
-        if (now < rrsig.inception || now > rrsig.expiration) continue;
+          for (const rrsig of nsec3RRSIGs) {
+            // Find matching DNSKEY
+            const matchingDNSKEY = dnskeyRecords.find((key) => {
+              const keyTag = calculateKeyTag(key);
+              return keyTag === rrsig.keyTag;
+            });
 
-        // Build canonical RRset for NSEC
-        const nsecRRset = buildCanonicalRRset([record], rrsig, response);
-        const rrsigData = buildRRSIGData(rrsig);
+            if (!matchingDNSKEY) continue;
 
-        // Verify signature
-        if (verifySignature(nsecRRset, rrsigData, rrsig.signature, matchingDNSKEY)) {
-          // Check if queried type is in the type bitmap (if so, record exists, not a denial)
-          if (nsec.typeBitMap.includes(queriedType)) {
-            return false; // Type exists, not a denial
+            // Check signature validity
+            const now = Math.floor(Date.now() / 1000);
+            if (now < rrsig.inception || now > rrsig.expiration) continue;
+
+            // Build canonical RRset for NSEC3
+            const nsec3RRset = buildCanonicalRRset([record], rrsig, response);
+            const rrsigData = buildRRSIGData(rrsig);
+
+            // Verify signature
+            if (verifySignature(nsec3RRset, rrsigData, rrsig.signature, matchingDNSKEY)) {
+              // Check if queried type is in the type bitmap (if so, record exists, not a denial)
+              if (nsec3.typeBitMap.includes(queriedType)) {
+                return false; // Type exists, not a denial
+              }
+              return true; // Valid authenticated denial
+            }
           }
-          return true; // Valid authenticated denial
         }
       }
     }
@@ -992,20 +1161,12 @@ export function validateDNSSEC(
       // Check for NSEC/NSEC3 records for authenticated denial
       const nsecRecords = [...answers, ...authority].filter((rr) => rr.type === NSEC || rr.type === NSEC3);
       if (nsecRecords.length > 0) {
-        // Validate NSEC/NSEC3 records
-        const nsecValid = validateNSECDenial(
-          nsecRecords.filter((rr) => rr.type === NSEC),
-          domain,
-          queryType,
-          rrsigs,
-          dnskeyParsed,
-          response,
-        );
+        // Validate NSEC/NSEC3 records (function handles both)
+        const nsecValid = validateNSECDenial(nsecRecords, domain, queryType, rrsigs, dnskeyParsed, response);
         if (nsecValid) {
-          return { valid: true, reason: 'Authenticated denial (NSEC)' };
+          return { valid: true, reason: 'Authenticated denial (NSEC/NSEC3)' };
         }
-        // TODO: Add NSEC3 validation
-        // For now, if NSEC validation fails, return invalid
+        // If validation failed, return invalid
         return { valid: false, reason: 'NSEC/NSEC3 records present but validation failed' };
       }
       return { valid: false, reason: 'No records found and no authenticated denial' };
