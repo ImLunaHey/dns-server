@@ -1264,7 +1264,7 @@ export class DNSServer {
   }
 
   private async forwardQuery(msg: Buffer, domain: string, clientIp?: string, useTcp: boolean = false): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
       // Priority: client-specific DNS > conditional forwarding > default upstream
       let targetDNS = this.upstreamDNS;
 
@@ -1280,6 +1280,21 @@ export class DNSServer {
         const conditionalDNS = dbConditionalForwarding.findUpstreamDNS(domain);
         if (conditionalDNS) {
           targetDNS = conditionalDNS;
+        }
+      }
+
+      // Check if targetDNS is a DoH URL (https://)
+      if (targetDNS.startsWith('https://')) {
+        try {
+          const dohResponse = await this.forwardQueryDoH(msg, targetDNS);
+          resolve(dohResponse);
+          return;
+        } catch (error) {
+          logger.error('DoH query failed, falling back to UDP', {
+            error: error instanceof Error ? error : new Error(String(error)),
+            targetDNS,
+          });
+          // Fall through to UDP fallback
         }
       }
 
@@ -1357,6 +1372,202 @@ export class DNSServer {
         });
       }
     });
+  }
+
+  /**
+   * Forward DNS query using DNS-over-HTTPS (DoH) - RFC 8484
+   */
+  private async forwardQueryDoH(msg: Buffer, dohUrl: string): Promise<Buffer> {
+    try {
+      // Ensure URL ends with /dns-query if no path specified
+      let url = dohUrl;
+      if (!url.includes('/dns-query') && !url.match(/\/[^\/]+$/)) {
+        url = url.endsWith('/') ? `${url}dns-query` : `${url}/dns-query`;
+      }
+
+      // Try binary format first (application/dns-message)
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/dns-message',
+            'Accept': 'application/dns-message',
+          },
+          body: msg,
+        });
+
+        if (!fetchResponse || !fetchResponse.ok) {
+          throw new Error(`DoH request failed: ${fetchResponse?.status || 'unknown'} ${fetchResponse?.statusText || 'unknown'}`);
+        }
+
+        const contentType = fetchResponse.headers.get('content-type') || '';
+        if (contentType.includes('application/dns-message')) {
+          const arrayBuffer = await fetchResponse.arrayBuffer();
+          return Buffer.from(arrayBuffer);
+        }
+
+        // Fall back to JSON format if binary not available
+        if (contentType.includes('application/dns-json') || contentType.includes('application/json')) {
+          const jsonData = await fetchResponse.json();
+          return this.convertDoHJSONToDNSMessage(jsonData, msg);
+        }
+
+        throw new Error(`Unsupported DoH content type: ${contentType}`);
+      } catch (error) {
+        // If POST fails, try GET with base64url encoding
+        const base64Query = msg.toString('base64url');
+        const getUrl = `${url}?dns=${base64Query}`;
+
+        const fetchResponse = await fetch(getUrl, {
+          method: 'GET',
+          headers: {
+            'Accept': 'application/dns-message, application/dns-json',
+          },
+        });
+
+        if (!fetchResponse || !fetchResponse.ok) {
+          throw new Error(`DoH GET request failed: ${fetchResponse?.status || 'unknown'} ${fetchResponse?.statusText || 'unknown'}`);
+        }
+
+        const contentType = fetchResponse.headers.get('content-type') || '';
+        if (contentType.includes('application/dns-message')) {
+          const arrayBuffer = await fetchResponse.arrayBuffer();
+          return Buffer.from(arrayBuffer);
+        }
+
+        if (contentType.includes('application/dns-json') || contentType.includes('application/json')) {
+          const jsonData = await fetchResponse.json();
+          return this.convertDoHJSONToDNSMessage(jsonData, msg);
+        }
+
+        throw new Error(`Unsupported DoH content type: ${contentType}`);
+      }
+    } catch (error) {
+      logger.error('Error forwarding query via DoH', {
+        error: error instanceof Error ? error : new Error(String(error)),
+        dohUrl,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Convert DoH JSON response to DNS message format
+   */
+  private convertDoHJSONToDNSMessage(jsonData: any, originalQuery: Buffer): Buffer {
+    try {
+      const queryId = originalQuery.readUInt16BE(0);
+      const response = Buffer.alloc(4096);
+      let offset = 0;
+
+      // Header
+      response.writeUInt16BE(queryId, offset);
+      offset += 2;
+      response.writeUInt16BE(0x8180, offset); // QR=1, AA=0, RD=1, RA=1
+      offset += 2;
+      response.writeUInt16BE(1, offset); // Questions: 1
+      offset += 2;
+
+      // Copy question section from original query
+      let qOffset = 12;
+      while (qOffset < originalQuery.length && originalQuery[qOffset] !== 0) {
+        const length = originalQuery[qOffset];
+        if ((length & 0xc0) === 0xc0) {
+          response.writeUInt16BE(originalQuery.readUInt16BE(qOffset), offset);
+          offset += 2;
+          qOffset += 2;
+          break;
+        }
+        response[offset++] = length;
+        qOffset++;
+        if (qOffset + length > originalQuery.length) break;
+        originalQuery.copy(response, offset, qOffset, qOffset + length);
+        offset += length;
+        qOffset += length;
+      }
+      if (originalQuery[qOffset] === 0) {
+        response[offset++] = 0;
+        qOffset++;
+      }
+      if (qOffset + 4 <= originalQuery.length) {
+        originalQuery.copy(response, offset, qOffset, qOffset + 4);
+        offset += 4;
+      }
+
+      // Answers
+      const answers = jsonData.Answer || [];
+      response.writeUInt16BE(answers.length, 6);
+      response.writeUInt16BE(0, 8); // Authority
+      response.writeUInt16BE(0, 10); // Additional
+
+      // Add answer records
+      for (const answer of answers) {
+        // Name (use compression pointer to question)
+        const namePointer = 0xc000 | 12;
+        response.writeUInt16BE(namePointer, offset);
+        offset += 2;
+
+        // Type
+        const typeMap: Record<string, number> = {
+          A: 1,
+          AAAA: 28,
+          MX: 15,
+          TXT: 16,
+          NS: 2,
+          CNAME: 5,
+          SOA: 6,
+          PTR: 12,
+        };
+        const type = typeMap[answer.type] || 1;
+        response.writeUInt16BE(type, offset);
+        offset += 2;
+
+        // Class (IN = 1)
+        response.writeUInt16BE(1, offset);
+        offset += 2;
+
+        // TTL
+        response.writeUInt32BE(answer.TTL || 300, offset);
+        offset += 4;
+
+        // Data
+        const dataStart = offset;
+        offset += 2; // Reserve for length
+
+        if (type === 1) {
+          // A record
+          const parts = answer.data.split('.');
+          response[offset++] = parseInt(parts[0], 10);
+          response[offset++] = parseInt(parts[1], 10);
+          response[offset++] = parseInt(parts[2], 10);
+          response[offset++] = parseInt(parts[3], 10);
+        } else if (type === 28) {
+          // AAAA record
+          const parts = answer.data.split(':');
+          for (let i = 0; i < 8; i++) {
+            const num = parseInt(parts[i] || '0', 16);
+            response.writeUInt16BE(num, offset);
+            offset += 2;
+          }
+        } else {
+          // Other types - simplified
+          const dataBytes = Buffer.from(answer.data, 'utf8');
+          dataBytes.copy(response, offset);
+          offset += dataBytes.length;
+        }
+
+        // Write data length
+        const dataLength = offset - dataStart - 2;
+        response.writeUInt16BE(dataLength, dataStart);
+      }
+
+      return response.slice(0, offset);
+    } catch (error) {
+      logger.error('Error converting DoH JSON to DNS message', {
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      throw error;
+    }
   }
 
   private addQuery(query: DNSQuery) {
