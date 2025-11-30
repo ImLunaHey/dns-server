@@ -360,17 +360,32 @@ db.exec(`
 
 // Migrations: Add missing columns to existing tables
 try {
-  const tableInfo = db.prepare('PRAGMA table_info(queries)').all() as Array<{ name: string }>;
-  const columnNames = tableInfo.map((col) => col.name);
+  // Migrate queries table
+  const queriesTableInfo = db.prepare('PRAGMA table_info(queries)').all() as Array<{ name: string }>;
+  const queriesColumnNames = queriesTableInfo.map((col) => col.name);
 
-  if (!columnNames.includes('blockReason')) {
+  if (!queriesColumnNames.includes('blockReason')) {
     logger.info('Adding blockReason column to queries table...');
     db.exec('ALTER TABLE queries ADD COLUMN blockReason TEXT');
   }
 
-  if (!columnNames.includes('cached')) {
+  if (!queriesColumnNames.includes('cached')) {
     logger.info('Adding cached column to queries table...');
     db.exec('ALTER TABLE queries ADD COLUMN cached INTEGER DEFAULT 0');
+  }
+
+  if (!queriesColumnNames.includes('rcode')) {
+    logger.info('Adding rcode column to queries table...');
+    db.exec('ALTER TABLE queries ADD COLUMN rcode INTEGER');
+  }
+
+  // Migrate conditional_forwarding table
+  const conditionalForwardingTableInfo = db.prepare('PRAGMA table_info(conditional_forwarding)').all() as Array<{ name: string }>;
+  const conditionalForwardingColumnNames = conditionalForwardingTableInfo.map((col) => col.name);
+
+  if (!conditionalForwardingColumnNames.includes('priority')) {
+    logger.info('Adding priority column to conditional_forwarding table...');
+    db.exec('ALTER TABLE conditional_forwarding ADD COLUMN priority INTEGER NOT NULL DEFAULT 0');
   }
 } catch (error) {
   logger.error('Error running migrations', {
