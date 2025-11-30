@@ -19,11 +19,23 @@ export function Zones() {
   const [newDomain, setNewDomain] = useState("");
   const [newSoaMname, setNewSoaMname] = useState("ns1.example.com");
   const [newSoaRname, setNewSoaRname] = useState("admin.example.com");
-  
+
   // Record form state
   const [showAddRecord, setShowAddRecord] = useState(false);
   const [newRecordName, setNewRecordName] = useState("");
-  const [newRecordType, setNewRecordType] = useState<"A" | "AAAA" | "MX" | "TXT" | "NS" | "CNAME">("A");
+  const [newRecordType, setNewRecordType] = useState<
+    | "A"
+    | "AAAA"
+    | "MX"
+    | "TXT"
+    | "NS"
+    | "CNAME"
+    | "NAPTR"
+    | "SSHFP"
+    | "TLSA"
+    | "SVCB"
+    | "HTTPS"
+  >("A");
   const [newRecordTTL, setNewRecordTTL] = useState("3600");
   const [newRecordData, setNewRecordData] = useState("");
   const [newRecordPriority, setNewRecordPriority] = useState("");
@@ -40,8 +52,11 @@ export function Zones() {
   });
 
   const createZone = useMutation({
-    mutationFn: (data: { domain: string; soaMname: string; soaRname: string }) =>
-      api.createZone(data.domain, data.soaMname, data.soaRname),
+    mutationFn: (data: {
+      domain: string;
+      soaMname: string;
+      soaRname: string;
+    }) => api.createZone(data.domain, data.soaMname, data.soaRname),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["zones"] });
       setShowCreateZone(false);
@@ -68,10 +83,26 @@ export function Zones() {
   });
 
   const createRecord = useMutation({
-    mutationFn: (data: { zoneId: number; name: string; type: string; ttl: number; data: string; priority?: number }) =>
-      api.createZoneRecord(data.zoneId, data.name, data.type, data.ttl, data.data, data.priority),
+    mutationFn: (data: {
+      zoneId: number;
+      name: string;
+      type: string;
+      ttl: number;
+      data: string;
+      priority?: number;
+    }) =>
+      api.createZoneRecord(
+        data.zoneId,
+        data.name,
+        data.type,
+        data.ttl,
+        data.data,
+        data.priority
+      ),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["zoneRecords", selectedZone] });
+      queryClient.invalidateQueries({
+        queryKey: ["zoneRecords", selectedZone],
+      });
       setShowAddRecord(false);
       setNewRecordName("");
       setNewRecordType("A");
@@ -88,7 +119,9 @@ export function Zones() {
   const deleteRecord = useMutation({
     mutationFn: (id: number) => api.deleteZoneRecord(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["zoneRecords", selectedZone] });
+      queryClient.invalidateQueries({
+        queryKey: ["zoneRecords", selectedZone],
+      });
       toast.success("Record deleted successfully");
     },
     onError: (error: Error) => {
@@ -110,7 +143,9 @@ export function Zones() {
     if (!selectedZone) return;
     if (newRecordName.trim() && newRecordData.trim() && newRecordTTL.trim()) {
       const ttl = parseInt(newRecordTTL, 10);
-      const priority = newRecordPriority.trim() ? parseInt(newRecordPriority, 10) : undefined;
+      const priority = newRecordPriority.trim()
+        ? parseInt(newRecordPriority, 10)
+        : undefined;
       createRecord.mutate({
         zoneId: selectedZone,
         name: newRecordName.trim(),
@@ -172,7 +207,12 @@ export function Zones() {
             <div className="mt-4">
               <Button
                 onClick={handleCreateZone}
-                disabled={createZone.isPending || !newDomain.trim() || !newSoaMname.trim() || !newSoaRname.trim()}
+                disabled={
+                  createZone.isPending ||
+                  !newDomain.trim() ||
+                  !newSoaMname.trim() ||
+                  !newSoaRname.trim()
+                }
               >
                 Create Zone
               </Button>
@@ -186,7 +226,9 @@ export function Zones() {
               Zones
             </h2>
             {zones.length === 0 ? (
-              <p className="text-gray-500 dark:text-gray-400">No zones configured</p>
+              <p className="text-gray-500 dark:text-gray-400">
+                No zones configured
+              </p>
             ) : (
               <div className="space-y-2">
                 {zones.map((zone) => (
@@ -205,7 +247,8 @@ export function Zones() {
                           {zone.domain}
                         </div>
                         <div className="text-sm text-gray-500 dark:text-gray-400">
-                          Serial: {zone.soa_serial} • {zone.enabled ? "Enabled" : "Disabled"}
+                          Serial: {zone.soa_serial} •{" "}
+                          {zone.enabled ? "Enabled" : "Disabled"}
                         </div>
                       </div>
                       <Button
@@ -241,7 +284,7 @@ export function Zones() {
                 </Button>
               )}
             </div>
-            
+
             {selectedZone === null ? (
               <p className="text-gray-500 dark:text-gray-400">
                 Select a zone to view records
@@ -265,7 +308,11 @@ export function Zones() {
                       <FormField label="Type">
                         <Select
                           value={newRecordType}
-                          onChange={(e) => setNewRecordType(e.target.value as typeof newRecordType)}
+                          onChange={(e) =>
+                            setNewRecordType(
+                              e.target.value as typeof newRecordType
+                            )
+                          }
                         >
                           <option value="A">A (IPv4)</option>
                           <option value="AAAA">AAAA (IPv6)</option>
@@ -273,6 +320,17 @@ export function Zones() {
                           <option value="TXT">TXT (Text)</option>
                           <option value="NS">NS (Name Server)</option>
                           <option value="CNAME">CNAME (Canonical Name)</option>
+                          <option value="NAPTR">
+                            NAPTR (Name Authority Pointer)
+                          </option>
+                          <option value="SSHFP">SSHFP (SSH Fingerprint)</option>
+                          <option value="TLSA">
+                            TLSA (DANE/TLS Authentication)
+                          </option>
+                          <option value="SVCB">SVCB (Service Binding)</option>
+                          <option value="HTTPS">
+                            HTTPS (HTTPS Service Binding)
+                          </option>
                         </Select>
                       </FormField>
                       <FormField label="TTL">
@@ -288,27 +346,52 @@ export function Zones() {
                           <Input
                             type="number"
                             value={newRecordPriority}
-                            onChange={(e) => setNewRecordPriority(e.target.value)}
+                            onChange={(e) =>
+                              setNewRecordPriority(e.target.value)
+                            }
                             placeholder="10"
                           />
                         </FormField>
                       )}
-                      <FormField 
-                        label="Data" 
-                        className={newRecordType === "MX" ? "md:col-span-2" : ""}
+                      <FormField
+                        label="Data"
+                        className={
+                          newRecordType === "MX" ||
+                          newRecordType === "NAPTR" ||
+                          newRecordType === "SVCB" ||
+                          newRecordType === "HTTPS"
+                            ? "md:col-span-2"
+                            : ""
+                        }
                       >
                         <Input
                           type="text"
                           value={newRecordData}
                           onChange={(e) => setNewRecordData(e.target.value)}
                           placeholder={
-                            newRecordType === "A" ? "192.168.1.100" :
-                            newRecordType === "AAAA" ? "2001:db8::1" :
-                            newRecordType === "MX" ? "mail.example.com" :
-                            newRecordType === "TXT" ? "text content" :
-                            newRecordType === "NS" ? "ns1.example.com" :
-                            newRecordType === "CNAME" ? "example.com" :
-                            "record data"
+                            newRecordType === "A"
+                              ? "192.168.1.100"
+                              : newRecordType === "AAAA"
+                              ? "2001:db8::1"
+                              : newRecordType === "MX"
+                              ? "mail.example.com"
+                              : newRecordType === "TXT"
+                              ? "text content"
+                              : newRecordType === "NS"
+                              ? "ns1.example.com"
+                              : newRecordType === "CNAME"
+                              ? "example.com"
+                              : newRecordType === "NAPTR"
+                              ? '10 10 "u" "sip+E2U" "!^.*$!sip:customer@example.com!" .'
+                              : newRecordType === "SSHFP"
+                              ? "1 1 abc123def456..."
+                              : newRecordType === "TLSA"
+                              ? "3 1 1 abc123def456..."
+                              : newRecordType === "SVCB"
+                              ? "1 . alpn=h2,h3"
+                              : newRecordType === "HTTPS"
+                              ? "1 . alpn=h2,h3 ipv4hint=1.2.3.4"
+                              : "record data"
                           }
                         />
                       </FormField>
@@ -328,11 +411,13 @@ export function Zones() {
                     </div>
                   </div>
                 )}
-                
+
                 {recordsLoading ? (
                   <Loading />
                 ) : records.length === 0 ? (
-                  <p className="text-gray-500 dark:text-gray-400">No records in this zone</p>
+                  <p className="text-gray-500 dark:text-gray-400">
+                    No records in this zone
+                  </p>
                 ) : (
                   <DataTable
                     data={records}
@@ -341,14 +426,23 @@ export function Zones() {
                       { header: "Type", accessor: "type" },
                       { header: "TTL", accessor: "ttl" },
                       { header: "Data", accessor: "data" },
-                      ...(records.some(r => r.priority !== null) ? [{ header: "Priority", accessor: "priority" as const }] : []),
+                      ...(records.some((r) => r.priority !== null)
+                        ? [
+                            {
+                              header: "Priority",
+                              accessor: "priority" as const,
+                            },
+                          ]
+                        : []),
                     ]}
                     actions={(row) => [
                       {
                         title: "Delete",
                         color: "red" as const,
                         onClick: () => {
-                          if (confirm(`Delete record ${row.name} (${row.type})?`)) {
+                          if (
+                            confirm(`Delete record ${row.name} (${row.type})?`)
+                          ) {
                             deleteRecord.mutate(row.id);
                           }
                         },
@@ -366,4 +460,3 @@ export function Zones() {
     </>
   );
 }
-

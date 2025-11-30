@@ -1197,6 +1197,11 @@ export class DNSServer {
       PTR: 12,
       SRV: 33,
       CAA: 257,
+      NAPTR: 35,
+      SSHFP: 44,
+      TLSA: 52,
+      SVCB: 64,
+      HTTPS: 65,
     };
     response.writeUInt16BE(typeMap[type.toUpperCase()] || 1, offset);
     offset += 2;
@@ -1280,6 +1285,99 @@ export class DNSServer {
           Buffer.from([tagBytes.length]),
           tagBytes,
           valueBytes,
+        ]);
+      } else {
+        // Fallback: treat as raw data
+        dataBytes = Buffer.from(data, 'utf8');
+      }
+    } else if (type === 'NAPTR') {
+      // NAPTR: order (2) + preference (2) + flags (length-prefixed) + service (length-prefixed) + regexp (length-prefixed) + replacement (domain)
+      // Data format: "order preference flags service regexp replacement" or "10 10 \"u\" \"sip+E2U\" \"!^.*$!sip:customer@example.com!\" ."
+      const parts = data.match(/(\d+)\s+(\d+)\s+"([^"]*)"\s+"([^"]*)"\s+"([^"]*)"\s+(.+)/);
+      if (parts && parts.length >= 7) {
+        const order = parseInt(parts[1], 10);
+        const preference = parseInt(parts[2], 10);
+        const flags = Buffer.from(parts[3], 'utf8');
+        const service = Buffer.from(parts[4], 'utf8');
+        const regexp = Buffer.from(parts[5], 'utf8');
+        const replacement = this.domainToBytes(parts[6].trim());
+        dataBytes = Buffer.concat([
+          Buffer.from([(order >> 8) & 0xff, order & 0xff]),
+          Buffer.from([(preference >> 8) & 0xff, preference & 0xff]),
+          Buffer.from([flags.length]),
+          flags,
+          Buffer.from([service.length]),
+          service,
+          Buffer.from([regexp.length]),
+          regexp,
+          replacement,
+        ]);
+      } else {
+        // Fallback: treat as raw data
+        dataBytes = Buffer.from(data, 'utf8');
+      }
+    } else if (type === 'SSHFP') {
+      // SSHFP: algorithm (1) + fp_type (1) + fingerprint (hex)
+      // Data format: "algorithm fp_type fingerprint" or "1 1 abc123..."
+      const parts = data.split(' ');
+      if (parts.length >= 3) {
+        const algorithm = parseInt(parts[0], 10);
+        const fpType = parseInt(parts[1], 10);
+        const fingerprint = Buffer.from(parts[2].replace(/:/g, ''), 'hex');
+        dataBytes = Buffer.concat([Buffer.from([algorithm & 0xff, fpType & 0xff]), fingerprint]);
+      } else {
+        // Fallback: treat as raw data
+        dataBytes = Buffer.from(data, 'utf8');
+      }
+    } else if (type === 'TLSA') {
+      // TLSA: usage (1) + selector (1) + matching_type (1) + certificate_association_data (hex)
+      // Data format: "usage selector matching_type hexdata" or "3 1 1 abc123..."
+      const parts = data.split(' ');
+      if (parts.length >= 4) {
+        const usage = parseInt(parts[0], 10);
+        const selector = parseInt(parts[1], 10);
+        const matchingType = parseInt(parts[2], 10);
+        const certData = Buffer.from(parts[3].replace(/:/g, ''), 'hex');
+        dataBytes = Buffer.concat([
+          Buffer.from([usage & 0xff, selector & 0xff, matchingType & 0xff]),
+          certData,
+        ]);
+      } else {
+        // Fallback: treat as raw data
+        dataBytes = Buffer.from(data, 'utf8');
+      }
+    } else if (type === 'SVCB' || type === 'HTTPS') {
+      // SVCB/HTTPS: SvcPriority (2) + TargetName (domain, can be ".") + SvcParams (key-value pairs)
+      // Data format: "priority targetname key=value key=value" or "1 . alpn=h2,h3" or "16 example.com ipv4hint=1.2.3.4"
+      const parts = data.split(' ');
+      if (parts.length >= 2) {
+        const priority = parseInt(parts[0], 10);
+        const targetName = parts[1] === '.' ? Buffer.from([0]) : this.domainToBytes(parts[1]);
+        const svcParams: Buffer[] = [];
+        // Parse SvcParams (key=value pairs)
+        for (let i = 2; i < parts.length; i++) {
+          const param = parts[i];
+          const eqIndex = param.indexOf('=');
+          if (eqIndex > 0) {
+            const key = param.substring(0, eqIndex);
+            const value = param.substring(eqIndex + 1);
+            const keyBytes = Buffer.from(key, 'utf8');
+            const valueBytes = Buffer.from(value, 'utf8');
+            // SvcParam: key (length-prefixed) + value (length-prefixed)
+            svcParams.push(
+              Buffer.concat([
+                Buffer.from([keyBytes.length]),
+                keyBytes,
+                Buffer.from([valueBytes.length]),
+                valueBytes,
+              ]),
+            );
+          }
+        }
+        dataBytes = Buffer.concat([
+          Buffer.from([(priority >> 8) & 0xff, priority & 0xff]),
+          targetName,
+          ...svcParams,
         ]);
       } else {
         // Fallback: treat as raw data
@@ -1515,6 +1613,11 @@ export class DNSServer {
       16: 'TXT',
       28: 'AAAA',
       33: 'SRV',
+      35: 'NAPTR',
+      44: 'SSHFP',
+      52: 'TLSA',
+      64: 'SVCB',
+      65: 'HTTPS',
       257: 'CAA',
     };
     

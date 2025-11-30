@@ -300,6 +300,11 @@ function createZoneTransferRecord(
     PTR: 12,
     SRV: 33,
     CAA: 257,
+    NAPTR: 35,
+    SSHFP: 44,
+    TLSA: 52,
+    SVCB: 64,
+    HTTPS: 65,
   };
   response.writeUInt16BE(typeMap[type.toUpperCase()] || 1, offset);
   offset += 2;
@@ -396,6 +401,82 @@ function createZoneTransferRecord(
       dataBytes = Buffer.concat([Buffer.from([flags & 0xff]), Buffer.from([tagBytes.length]), tagBytes, valueBytes]);
     } else {
       // Fallback: treat as raw data
+      dataBytes = Buffer.from(data, 'utf8');
+    }
+  } else if (type === 'NAPTR') {
+    // NAPTR: order (2) + preference (2) + flags (length-prefixed) + service (length-prefixed) + regexp (length-prefixed) + replacement (domain)
+    // Data format: "order preference \"flags\" \"service\" \"regexp\" replacement"
+    const parts = data.match(/(\d+)\s+(\d+)\s+"([^"]*)"\s+"([^"]*)"\s+"([^"]*)"\s+(.+)/);
+    if (parts && parts.length >= 7) {
+      const order = parseInt(parts[1], 10);
+      const preference = parseInt(parts[2], 10);
+      const flags = Buffer.from(parts[3], 'utf8');
+      const service = Buffer.from(parts[4], 'utf8');
+      const regexp = Buffer.from(parts[5], 'utf8');
+      const replacement = domainToBytes(parts[6].trim());
+      dataBytes = Buffer.concat([
+        Buffer.from([(order >> 8) & 0xff, order & 0xff]),
+        Buffer.from([(preference >> 8) & 0xff, preference & 0xff]),
+        Buffer.from([flags.length]),
+        flags,
+        Buffer.from([service.length]),
+        service,
+        Buffer.from([regexp.length]),
+        regexp,
+        replacement,
+      ]);
+    } else {
+      dataBytes = Buffer.from(data, 'utf8');
+    }
+  } else if (type === 'SSHFP') {
+    // SSHFP: algorithm (1) + fp_type (1) + fingerprint (hex)
+    // Data format: "algorithm fp_type fingerprint"
+    const parts = data.split(' ');
+    if (parts.length >= 3) {
+      const algorithm = parseInt(parts[0], 10);
+      const fpType = parseInt(parts[1], 10);
+      const fingerprint = Buffer.from(parts[2].replace(/:/g, ''), 'hex');
+      dataBytes = Buffer.concat([Buffer.from([algorithm & 0xff, fpType & 0xff]), fingerprint]);
+    } else {
+      dataBytes = Buffer.from(data, 'utf8');
+    }
+  } else if (type === 'TLSA') {
+    // TLSA: usage (1) + selector (1) + matching_type (1) + certificate_association_data (hex)
+    // Data format: "usage selector matching_type hexdata"
+    const parts = data.split(' ');
+    if (parts.length >= 4) {
+      const usage = parseInt(parts[0], 10);
+      const selector = parseInt(parts[1], 10);
+      const matchingType = parseInt(parts[2], 10);
+      const certData = Buffer.from(parts[3].replace(/:/g, ''), 'hex');
+      dataBytes = Buffer.concat([Buffer.from([usage & 0xff, selector & 0xff, matchingType & 0xff]), certData]);
+    } else {
+      dataBytes = Buffer.from(data, 'utf8');
+    }
+  } else if (type === 'SVCB' || type === 'HTTPS') {
+    // SVCB/HTTPS: SvcPriority (2) + TargetName (domain, can be ".") + SvcParams (key-value pairs)
+    // Data format: "priority targetname key=value key=value"
+    const parts = data.split(' ');
+    if (parts.length >= 2) {
+      const priority = parseInt(parts[0], 10);
+      const targetName = parts[1] === '.' ? Buffer.from([0]) : domainToBytes(parts[1]);
+      const svcParams: Buffer[] = [];
+      // Parse SvcParams (key=value pairs)
+      for (let i = 2; i < parts.length; i++) {
+        const param = parts[i];
+        const eqIndex = param.indexOf('=');
+        if (eqIndex > 0) {
+          const key = param.substring(0, eqIndex);
+          const value = param.substring(eqIndex + 1);
+          const keyBytes = Buffer.from(key, 'utf8');
+          const valueBytes = Buffer.from(value, 'utf8');
+          svcParams.push(
+            Buffer.concat([Buffer.from([keyBytes.length]), keyBytes, Buffer.from([valueBytes.length]), valueBytes]),
+          );
+        }
+      }
+      dataBytes = Buffer.concat([Buffer.from([(priority >> 8) & 0xff, priority & 0xff]), targetName, ...svcParams]);
+    } else {
       dataBytes = Buffer.from(data, 'utf8');
     }
   } else {

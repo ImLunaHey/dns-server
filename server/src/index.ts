@@ -149,6 +149,11 @@ function createDNSQueryFromParams(domain: string, type: string, dnssecOK: boolea
     PTR: 12,
     SRV: 33,
     CAA: 257,
+    NAPTR: 35,
+    SSHFP: 44,
+    TLSA: 52,
+    SVCB: 64,
+    HTTPS: 65,
     RRSIG: 46,
     DNSKEY: 48,
     DS: 43,
@@ -379,6 +384,74 @@ function parseResourceRecord(
       data = `UDP:${udpPayloadSize} EXTENDED-RCODE:${extendedRcode} VERSION:${version} FLAGS:${flags.toString(
         16,
       )} DO:${dnssecOK}`;
+    } else {
+      data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
+    }
+  } else if (rrType === 35) {
+    // NAPTR
+    if (dataLength >= 4) {
+      const order = response.readUInt16BE(currentOffset);
+      const preference = response.readUInt16BE(currentOffset + 2);
+      let pos = currentOffset + 4;
+      const flagsLen = response[pos++];
+      const flags = response.toString('utf8', pos, pos + flagsLen);
+      pos += flagsLen;
+      const serviceLen = response[pos++];
+      const service = response.toString('utf8', pos, pos + serviceLen);
+      pos += serviceLen;
+      const regexpLen = response[pos++];
+      const regexp = response.toString('utf8', pos, pos + regexpLen);
+      pos += regexpLen;
+      const replacement = parseDomainName(response, pos);
+      data = `${order} ${preference} "${flags}" "${service}" "${regexp}" ${replacement.name}`;
+    } else {
+      data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
+    }
+  } else if (rrType === 44) {
+    // SSHFP
+    if (dataLength >= 2) {
+      const algorithm = response[currentOffset];
+      const fpType = response[currentOffset + 1];
+      const fingerprint = response.slice(currentOffset + 2, currentOffset + dataLength);
+      data = `${algorithm} ${fpType} ${fingerprint.toString('hex')}`;
+    } else {
+      data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
+    }
+  } else if (rrType === 52) {
+    // TLSA
+    if (dataLength >= 3) {
+      const usage = response[currentOffset];
+      const selector = response[currentOffset + 1];
+      const matchingType = response[currentOffset + 2];
+      const certData = response.slice(currentOffset + 3, currentOffset + dataLength);
+      data = `${usage} ${selector} ${matchingType} ${certData.toString('hex')}`;
+    } else {
+      data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
+    }
+  } else if (rrType === 64 || rrType === 65) {
+    // SVCB/HTTPS
+    if (dataLength >= 2) {
+      const priority = response.readUInt16BE(currentOffset);
+      let pos = currentOffset + 2;
+      const targetName = parseDomainName(response, pos);
+      pos = targetName.newOffset;
+      const targetNameStr = targetName.name === '.' ? '.' : targetName.name;
+      const params: string[] = [];
+      // Parse SvcParams
+      while (pos < currentOffset + dataLength) {
+        if (pos + 1 > currentOffset + dataLength) break;
+        const keyLen = response[pos++];
+        if (pos + keyLen > currentOffset + dataLength) break;
+        const key = response.toString('utf8', pos, pos + keyLen);
+        pos += keyLen;
+        if (pos + 1 > currentOffset + dataLength) break;
+        const valueLen = response[pos++];
+        if (pos + valueLen > currentOffset + dataLength) break;
+        const value = response.toString('utf8', pos, pos + valueLen);
+        pos += valueLen;
+        params.push(`${key}=${value}`);
+      }
+      data = `${priority} ${targetNameStr} ${params.join(' ')}`;
     } else {
       data = response.slice(currentOffset, currentOffset + dataLength).toString('hex');
     }
