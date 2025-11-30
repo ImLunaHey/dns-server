@@ -11,10 +11,12 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ZonesRouteImport } from './routes/zones'
 import { Route as UiComponentsRouteImport } from './routes/ui-components'
+import { Route as TsigKeysRouteImport } from './routes/tsig-keys'
 import { Route as ToolsRouteImport } from './routes/tools'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as RegexFiltersRouteImport } from './routes/regex-filters'
+import { Route as QueryPatternsRouteImport } from './routes/query-patterns'
 import { Route as QueriesRouteImport } from './routes/queries'
 import { Route as LongTermRouteImport } from './routes/long-term'
 import { Route as LoginRouteImport } from './routes/login'
@@ -23,6 +25,7 @@ import { Route as HealthRouteImport } from './routes/health'
 import { Route as GroupsRouteImport } from './routes/groups'
 import { Route as DomainsRouteImport } from './routes/domains'
 import { Route as DisableRouteImport } from './routes/disable'
+import { Route as ConditionalForwardingRouteImport } from './routes/conditional-forwarding'
 import { Route as ClientsRouteImport } from './routes/clients'
 import { Route as CacheStatsRouteImport } from './routes/cache-stats'
 import { Route as BlockPageSettingsRouteImport } from './routes/block-page-settings'
@@ -40,6 +43,11 @@ const ZonesRoute = ZonesRouteImport.update({
 const UiComponentsRoute = UiComponentsRouteImport.update({
   id: '/ui-components',
   path: '/ui-components',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TsigKeysRoute = TsigKeysRouteImport.update({
+  id: '/tsig-keys',
+  path: '/tsig-keys',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ToolsRoute = ToolsRouteImport.update({
@@ -60,6 +68,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const RegexFiltersRoute = RegexFiltersRouteImport.update({
   id: '/regex-filters',
   path: '/regex-filters',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const QueryPatternsRoute = QueryPatternsRouteImport.update({
+  id: '/query-patterns',
+  path: '/query-patterns',
   getParentRoute: () => rootRouteImport,
 } as any)
 const QueriesRoute = QueriesRouteImport.update({
@@ -100,6 +113,11 @@ const DomainsRoute = DomainsRouteImport.update({
 const DisableRoute = DisableRouteImport.update({
   id: '/disable',
   path: '/disable',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConditionalForwardingRoute = ConditionalForwardingRouteImport.update({
+  id: '/conditional-forwarding',
+  path: '/conditional-forwarding',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ClientsRoute = ClientsRouteImport.update({
@@ -151,6 +169,7 @@ export interface FileRoutesByFullPath {
   '/block-page-settings': typeof BlockPageSettingsRoute
   '/cache-stats': typeof CacheStatsRoute
   '/clients': typeof ClientsRouteWithChildren
+  '/conditional-forwarding': typeof ConditionalForwardingRoute
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
   '/groups': typeof GroupsRoute
@@ -159,10 +178,12 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/long-term': typeof LongTermRoute
   '/queries': typeof QueriesRoute
+  '/query-patterns': typeof QueryPatternsRoute
   '/regex-filters': typeof RegexFiltersRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
+  '/tsig-keys': typeof TsigKeysRoute
   '/ui-components': typeof UiComponentsRoute
   '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
@@ -175,6 +196,7 @@ export interface FileRoutesByTo {
   '/block-page-settings': typeof BlockPageSettingsRoute
   '/cache-stats': typeof CacheStatsRoute
   '/clients': typeof ClientsRouteWithChildren
+  '/conditional-forwarding': typeof ConditionalForwardingRoute
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
   '/groups': typeof GroupsRoute
@@ -183,10 +205,12 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/long-term': typeof LongTermRoute
   '/queries': typeof QueriesRoute
+  '/query-patterns': typeof QueryPatternsRoute
   '/regex-filters': typeof RegexFiltersRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
+  '/tsig-keys': typeof TsigKeysRoute
   '/ui-components': typeof UiComponentsRoute
   '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
@@ -200,6 +224,7 @@ export interface FileRoutesById {
   '/block-page-settings': typeof BlockPageSettingsRoute
   '/cache-stats': typeof CacheStatsRoute
   '/clients': typeof ClientsRouteWithChildren
+  '/conditional-forwarding': typeof ConditionalForwardingRoute
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
   '/groups': typeof GroupsRoute
@@ -208,10 +233,12 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/long-term': typeof LongTermRoute
   '/queries': typeof QueriesRoute
+  '/query-patterns': typeof QueryPatternsRoute
   '/regex-filters': typeof RegexFiltersRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
+  '/tsig-keys': typeof TsigKeysRoute
   '/ui-components': typeof UiComponentsRoute
   '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
@@ -226,6 +253,7 @@ export interface FileRouteTypes {
     | '/block-page-settings'
     | '/cache-stats'
     | '/clients'
+    | '/conditional-forwarding'
     | '/disable'
     | '/domains'
     | '/groups'
@@ -234,10 +262,12 @@ export interface FileRouteTypes {
     | '/login'
     | '/long-term'
     | '/queries'
+    | '/query-patterns'
     | '/regex-filters'
     | '/settings'
     | '/setup'
     | '/tools'
+    | '/tsig-keys'
     | '/ui-components'
     | '/zones'
     | '/clients/$clientIp/stats'
@@ -250,6 +280,7 @@ export interface FileRouteTypes {
     | '/block-page-settings'
     | '/cache-stats'
     | '/clients'
+    | '/conditional-forwarding'
     | '/disable'
     | '/domains'
     | '/groups'
@@ -258,10 +289,12 @@ export interface FileRouteTypes {
     | '/login'
     | '/long-term'
     | '/queries'
+    | '/query-patterns'
     | '/regex-filters'
     | '/settings'
     | '/setup'
     | '/tools'
+    | '/tsig-keys'
     | '/ui-components'
     | '/zones'
     | '/clients/$clientIp/stats'
@@ -274,6 +307,7 @@ export interface FileRouteTypes {
     | '/block-page-settings'
     | '/cache-stats'
     | '/clients'
+    | '/conditional-forwarding'
     | '/disable'
     | '/domains'
     | '/groups'
@@ -282,10 +316,12 @@ export interface FileRouteTypes {
     | '/login'
     | '/long-term'
     | '/queries'
+    | '/query-patterns'
     | '/regex-filters'
     | '/settings'
     | '/setup'
     | '/tools'
+    | '/tsig-keys'
     | '/ui-components'
     | '/zones'
     | '/clients/$clientIp/stats'
@@ -299,6 +335,7 @@ export interface RootRouteChildren {
   BlockPageSettingsRoute: typeof BlockPageSettingsRoute
   CacheStatsRoute: typeof CacheStatsRoute
   ClientsRoute: typeof ClientsRouteWithChildren
+  ConditionalForwardingRoute: typeof ConditionalForwardingRoute
   DisableRoute: typeof DisableRoute
   DomainsRoute: typeof DomainsRoute
   GroupsRoute: typeof GroupsRoute
@@ -307,10 +344,12 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   LongTermRoute: typeof LongTermRoute
   QueriesRoute: typeof QueriesRoute
+  QueryPatternsRoute: typeof QueryPatternsRoute
   RegexFiltersRoute: typeof RegexFiltersRoute
   SettingsRoute: typeof SettingsRoute
   SetupRoute: typeof SetupRoute
   ToolsRoute: typeof ToolsRoute
+  TsigKeysRoute: typeof TsigKeysRoute
   UiComponentsRoute: typeof UiComponentsRoute
   ZonesRoute: typeof ZonesRoute
 }
@@ -329,6 +368,13 @@ declare module '@tanstack/react-router' {
       path: '/ui-components'
       fullPath: '/ui-components'
       preLoaderRoute: typeof UiComponentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/tsig-keys': {
+      id: '/tsig-keys'
+      path: '/tsig-keys'
+      fullPath: '/tsig-keys'
+      preLoaderRoute: typeof TsigKeysRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/tools': {
@@ -357,6 +403,13 @@ declare module '@tanstack/react-router' {
       path: '/regex-filters'
       fullPath: '/regex-filters'
       preLoaderRoute: typeof RegexFiltersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/query-patterns': {
+      id: '/query-patterns'
+      path: '/query-patterns'
+      fullPath: '/query-patterns'
+      preLoaderRoute: typeof QueryPatternsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/queries': {
@@ -413,6 +466,13 @@ declare module '@tanstack/react-router' {
       path: '/disable'
       fullPath: '/disable'
       preLoaderRoute: typeof DisableRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/conditional-forwarding': {
+      id: '/conditional-forwarding'
+      path: '/conditional-forwarding'
+      fullPath: '/conditional-forwarding'
+      preLoaderRoute: typeof ConditionalForwardingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/clients': {
@@ -493,6 +553,7 @@ const rootRouteChildren: RootRouteChildren = {
   BlockPageSettingsRoute: BlockPageSettingsRoute,
   CacheStatsRoute: CacheStatsRoute,
   ClientsRoute: ClientsRouteWithChildren,
+  ConditionalForwardingRoute: ConditionalForwardingRoute,
   DisableRoute: DisableRoute,
   DomainsRoute: DomainsRoute,
   GroupsRoute: GroupsRoute,
@@ -501,10 +562,12 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   LongTermRoute: LongTermRoute,
   QueriesRoute: QueriesRoute,
+  QueryPatternsRoute: QueryPatternsRoute,
   RegexFiltersRoute: RegexFiltersRoute,
   SettingsRoute: SettingsRoute,
   SetupRoute: SetupRoute,
   ToolsRoute: ToolsRoute,
+  TsigKeysRoute: TsigKeysRoute,
   UiComponentsRoute: UiComponentsRoute,
   ZonesRoute: ZonesRoute,
 }

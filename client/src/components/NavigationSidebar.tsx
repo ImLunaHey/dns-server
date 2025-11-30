@@ -12,6 +12,7 @@ const uiComponentNames = import.meta.env.DEV
 const navigation = [
   { name: "Dashboard", href: "/", icon: "📊" },
   { name: "Query Log", href: "/queries", icon: "📋" },
+  { name: "Query Patterns", href: "/query-patterns", icon: "📈" },
   { name: "Long-term Data", href: "/long-term", icon: "📈" },
   { name: "Server Health", href: "/health", icon: "💚" },
   { name: "Cache Statistics", href: "/cache-stats", icon: "💾" },
@@ -23,7 +24,9 @@ const navigation = [
   { name: "Adlists", href: "/adlists", icon: "🚫" },
   { name: "Disable Blocking", href: "/disable", icon: "⏸️" },
   { name: "Local DNS", href: "/local-dns", icon: "🏠" },
+  { name: "Conditional Forwarding", href: "/conditional-forwarding", icon: "🔄" },
   { name: "Zones", href: "/zones", icon: "🌍" },
+  { name: "TSIG Keys", href: "/tsig-keys", icon: "🔐" },
   { name: "Tools", href: "/tools", icon: "🔧" },
   { name: "Settings", href: "/settings", icon: "⚙️" },
   { name: "Block Page", href: "/block-page-settings", icon: "🚫" },

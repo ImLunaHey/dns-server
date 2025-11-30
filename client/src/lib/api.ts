@@ -559,6 +559,136 @@ export const api = {
     return response.json();
   },
 
+  // TSIG Keys
+  async getTSIGKeys(): Promise<
+    Array<{
+      id: number;
+      name: string;
+      algorithm: string;
+      enabled: boolean;
+      createdAt: number;
+      updatedAt: number;
+    }>
+  > {
+    const response = await fetch(`${API_URL}/api/tsig-keys`);
+    if (!response.ok) throw new Error("Failed to fetch TSIG keys");
+    return response.json();
+  },
+
+  async createTSIGKey(data: {
+    name: string;
+    algorithm: string;
+    secret: string;
+  }): Promise<void> {
+    const response = await fetch(`${API_URL}/api/tsig-keys`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) throw new Error("Failed to create TSIG key");
+  },
+
+  async updateTSIGKeyEnabled(
+    id: number,
+    enabled: boolean
+  ): Promise<void> {
+    const response = await fetch(`${API_URL}/api/tsig-keys/${id}/enable`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!response.ok) throw new Error("Failed to update TSIG key");
+  },
+
+  async deleteTSIGKey(id: number): Promise<void> {
+    const response = await fetch(`${API_URL}/api/tsig-keys/${id}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) throw new Error("Failed to delete TSIG key");
+  },
+
+  // Conditional Forwarding
+  async getConditionalForwarding(): Promise<
+    Array<{
+      id: number;
+      domain: string;
+      upstreamDNS: string;
+      enabled: boolean;
+      priority: number;
+      comment: string | null;
+      createdAt: number;
+      updatedAt: number;
+    }>
+  > {
+    const response = await fetch(`${API_URL}/api/conditional-forwarding`);
+    if (!response.ok)
+      throw new Error("Failed to fetch conditional forwarding rules");
+    return response.json();
+  },
+
+  async createConditionalForwarding(data: {
+    domain: string;
+    upstreamDNS: string;
+    comment?: string;
+    priority?: number;
+  }): Promise<void> {
+    const response = await fetch(`${API_URL}/api/conditional-forwarding`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok)
+      throw new Error("Failed to create conditional forwarding rule");
+  },
+
+  async updateConditionalForwarding(
+    id: number,
+    data: {
+      domain: string;
+      upstreamDNS: string;
+      comment?: string;
+      priority?: number;
+    }
+  ): Promise<void> {
+    const response = await fetch(
+      `${API_URL}/api/conditional-forwarding/${id}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }
+    );
+    if (!response.ok)
+      throw new Error("Failed to update conditional forwarding rule");
+  },
+
+  async deleteConditionalForwarding(id: number): Promise<void> {
+    const response = await fetch(
+      `${API_URL}/api/conditional-forwarding/${id}`,
+      {
+        method: "DELETE",
+      }
+    );
+    if (!response.ok)
+      throw new Error("Failed to delete conditional forwarding rule");
+  },
+
+  async updateConditionalForwardingEnabled(
+    id: number,
+    enabled: boolean
+  ): Promise<void> {
+    const response = await fetch(
+      `${API_URL}/api/conditional-forwarding/${id}/enable`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      }
+    );
+    if (!response.ok)
+      throw new Error("Failed to update conditional forwarding rule");
+  },
+
   async archiveQueries(
     daysToKeep: number = 7,
     compress: boolean = true
