@@ -1019,7 +1019,7 @@ export class DNSServer {
     if (zoneKeys.length > 0 && answers.length > 0) {
       // Get ZSK (Zone Signing Key) for signing
       const zsk = zoneKeys.find((k) => k.flags === 256) || zoneKeys[0];
-      
+
       // Build resource records for signing
       const recordsToSign: Array<{ name: string; type: number; ttl: number; data: Buffer }> = [];
       for (const record of answers) {
@@ -1035,7 +1035,7 @@ export class DNSServer {
           SRV: 33,
         };
         const recordType = typeMap[record.type] || 1;
-        
+
         // Convert record data to Buffer
         let recordData: Buffer;
         if (record.type === 'A') {
@@ -1048,7 +1048,7 @@ export class DNSServer {
         } else {
           recordData = this.domainToBytes(record.data);
         }
-        
+
         recordsToSign.push({
           name: domain,
           type: recordType,
@@ -1056,7 +1056,7 @@ export class DNSServer {
           data: recordData,
         });
       }
-      
+
       // Sign the RRset
       if (recordsToSign.length > 0) {
         const rrsig = signRRset(recordsToSign, zone.domain, zsk, answers[0].ttl);
@@ -1078,7 +1078,7 @@ export class DNSServer {
           additionalCount++;
         }
       }
-      
+
       // Add DNSKEY records if requested (type 48)
       if (queryType === 48) {
         for (const key of zoneKeys) {
@@ -1298,6 +1298,21 @@ export class DNSServer {
         }
       }
 
+      // Check if targetDNS is a DoT URL (tls:// or dot://)
+      if (targetDNS.startsWith('tls://') || targetDNS.startsWith('dot://')) {
+        try {
+          const dotResponse = await this.forwardQueryDoT(msg, targetDNS);
+          resolve(dotResponse);
+          return;
+        } catch (error) {
+          logger.error('DoT query failed, falling back to UDP', {
+            error: error instanceof Error ? error : new Error(String(error)),
+            targetDNS,
+          });
+          // Fall through to UDP fallback
+        }
+      }
+
       if (useTcp) {
         // Forward over TCP
         const isIPv6 = targetDNS.includes(':');
@@ -1387,28 +1402,30 @@ export class DNSServer {
 
       // Try binary format first (application/dns-message)
       try {
-        const response = await fetch(url, {
+        const postResponse = await fetch(url, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/dns-message',
-            'Accept': 'application/dns-message',
+            Accept: 'application/dns-message',
           },
           body: msg,
         });
 
-        if (!fetchResponse || !fetchResponse.ok) {
-          throw new Error(`DoH request failed: ${fetchResponse?.status || 'unknown'} ${fetchResponse?.statusText || 'unknown'}`);
+        if (!postResponse || !postResponse.ok) {
+          throw new Error(
+            `DoH request failed: ${postResponse?.status || 'unknown'} ${postResponse?.statusText || 'unknown'}`,
+          );
         }
 
-        const contentType = fetchResponse.headers.get('content-type') || '';
+        const contentType = postResponse.headers.get('content-type') || '';
         if (contentType.includes('application/dns-message')) {
-          const arrayBuffer = await fetchResponse.arrayBuffer();
+          const arrayBuffer = await postResponse.arrayBuffer();
           return Buffer.from(arrayBuffer);
         }
 
         // Fall back to JSON format if binary not available
         if (contentType.includes('application/dns-json') || contentType.includes('application/json')) {
-          const jsonData = await fetchResponse.json();
+          const jsonData = await postResponse.json();
           return this.convertDoHJSONToDNSMessage(jsonData, msg);
         }
 
@@ -1418,25 +1435,27 @@ export class DNSServer {
         const base64Query = msg.toString('base64url');
         const getUrl = `${url}?dns=${base64Query}`;
 
-        const fetchResponse = await fetch(getUrl, {
+        const getResponse = await fetch(getUrl, {
           method: 'GET',
           headers: {
-            'Accept': 'application/dns-message, application/dns-json',
+            Accept: 'application/dns-message, application/dns-json',
           },
         });
 
-        if (!fetchResponse || !fetchResponse.ok) {
-          throw new Error(`DoH GET request failed: ${fetchResponse?.status || 'unknown'} ${fetchResponse?.statusText || 'unknown'}`);
+        if (!getResponse || !getResponse.ok) {
+          throw new Error(
+            `DoH GET request failed: ${getResponse?.status || 'unknown'} ${getResponse?.statusText || 'unknown'}`,
+          );
         }
 
-        const contentType = fetchResponse.headers.get('content-type') || '';
+        const contentType = getResponse.headers.get('content-type') || '';
         if (contentType.includes('application/dns-message')) {
-          const arrayBuffer = await fetchResponse.arrayBuffer();
+          const arrayBuffer = await getResponse.arrayBuffer();
           return Buffer.from(arrayBuffer);
         }
 
         if (contentType.includes('application/dns-json') || contentType.includes('application/json')) {
-          const jsonData = await fetchResponse.json();
+          const jsonData = await getResponse.json();
           return this.convertDoHJSONToDNSMessage(jsonData, msg);
         }
 
@@ -1449,6 +1468,85 @@ export class DNSServer {
       });
       throw error;
     }
+  }
+
+  /**
+   * Forward DNS query using DNS-over-TLS (DoT) - RFC 7858
+   */
+  private async forwardQueryDoT(msg: Buffer, dotUrl: string): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      try {
+        // Parse DoT URL: tls://host:port or dot://host:port
+        // Default port is 853 for DoT
+        const urlMatch = dotUrl.match(/^(?:tls|dot):\/\/([^:]+)(?::(\d+))?$/);
+        if (!urlMatch) {
+          throw new Error(`Invalid DoT URL format: ${dotUrl}`);
+        }
+
+        const host = urlMatch[1];
+        const port = urlMatch[2] ? parseInt(urlMatch[2], 10) : 853;
+
+        // Create TLS connection
+        const socket = tls.connect(
+          {
+            host,
+            port,
+            rejectUnauthorized: true, // Verify server certificate
+            servername: host, // SNI
+          },
+          () => {
+            // Connection established, send DNS query with length prefix
+            const lengthPrefix = Buffer.allocUnsafe(2);
+            lengthPrefix.writeUInt16BE(msg.length, 0);
+            socket.write(Buffer.concat([lengthPrefix, msg]));
+          },
+        );
+
+        const timeout = setTimeout(() => {
+          socket.destroy();
+          reject(new Error('DoT query timeout'));
+        }, 10000); // 10 second timeout
+
+        let responseLength: number | null = null;
+        let responseBuffer = Buffer.alloc(0);
+
+        socket.on('data', (data: Buffer) => {
+          responseBuffer = Buffer.concat([responseBuffer, data]);
+
+          // DNS over TLS uses a 2-byte length prefix (same as TCP)
+          if (responseLength === null && responseBuffer.length >= 2) {
+            responseLength = responseBuffer.readUInt16BE(0);
+          }
+
+          if (responseLength !== null && responseBuffer.length >= responseLength + 2) {
+            clearTimeout(timeout);
+            socket.destroy();
+            // Extract the DNS message (skip the 2-byte length prefix)
+            const dnsResponse = responseBuffer.slice(2, responseLength + 2);
+            resolve(dnsResponse);
+          }
+        });
+
+        socket.on('error', (err) => {
+          clearTimeout(timeout);
+          socket.destroy();
+          reject(err);
+        });
+
+        socket.on('close', () => {
+          clearTimeout(timeout);
+          if (responseLength === null || responseBuffer.length < responseLength + 2) {
+            reject(new Error('DoT connection closed before response received'));
+          }
+        });
+      } catch (error) {
+        logger.error('Error forwarding query via DoT', {
+          error: error instanceof Error ? error : new Error(String(error)),
+          dotUrl,
+        });
+        reject(error);
+      }
+    });
   }
 
   /**
@@ -2043,7 +2141,7 @@ export class DNSServer {
             if (dnsMsg.length >= 12) {
               const flags = dnsMsg.readUInt16BE(2);
               const isQuery = (flags & 0x8000) === 0;
-              
+
               if (isQuery) {
                 // Parse query to get domain and type
                 let offset = 12;
@@ -2060,7 +2158,7 @@ export class DNSServer {
                   offset += length;
                 }
                 offset++; // Skip null terminator
-                
+
                 if (offset + 4 <= dnsMsg.length) {
                   const queryType = dnsMsg.readUInt16BE(offset);
                   const domain = domainParts.join('.');
@@ -2080,9 +2178,7 @@ export class DNSServer {
                       }
 
                       const transferRecords =
-                        queryType === 252
-                          ? handleAXFR(zone.id, queryId)
-                          : handleIXFR(zone.id, queryId, requestedSerial);
+                        queryType === 252 ? handleAXFR(zone.id, queryId) : handleIXFR(zone.id, queryId, requestedSerial);
 
                       // Send each record with TCP length prefix
                       for (const record of transferRecords) {
