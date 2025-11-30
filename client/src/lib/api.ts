@@ -113,6 +113,25 @@ export interface CacheStatistics {
   };
 }
 
+export interface UpstreamStats {
+  upstream: string;
+  totalQueries: number;
+  successCount: number;
+  failureCount: number;
+  avgResponseTime: number;
+  minResponseTime: number;
+  maxResponseTime: number;
+  successRate: number;
+}
+
+export interface UpstreamHourlyStats {
+  upstream: string;
+  hour: string;
+  totalQueries: number;
+  successCount: number;
+  avgResponseTime: number;
+}
+
 export const api = {
   async getStats(): Promise<DNSStats> {
     const response = await fetch(`${API_URL}/api/stats`);
@@ -1051,5 +1070,21 @@ export const api = {
       body: JSON.stringify(data),
     });
     if (!response.ok) throw new Error("Failed to update DDNS token");
+  },
+
+  async getUpstreamStats(hours: number = 24): Promise<UpstreamStats[]> {
+    const response = await fetch(`${API_URL}/api/stats/upstream?hours=${hours}`, {
+      credentials: "include",
+    });
+    if (!response.ok) throw new Error("Failed to fetch upstream statistics");
+    return response.json();
+  },
+
+  async getUpstreamHourlyStats(hours: number = 24): Promise<UpstreamHourlyStats[]> {
+    const response = await fetch(`${API_URL}/api/stats/upstream/hourly?hours=${hours}`, {
+      credentials: "include",
+    });
+    if (!response.ok) throw new Error("Failed to fetch upstream hourly statistics");
+    return response.json();
   },
 };

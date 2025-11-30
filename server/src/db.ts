@@ -294,6 +294,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ddns_tokens_token ON ddns_tokens(token);
   CREATE INDEX IF NOT EXISTS idx_ddns_tokens_domain ON ddns_tokens(domain);
 
+  -- Upstream DNS performance metrics
+  CREATE TABLE IF NOT EXISTS upstream_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    upstream TEXT NOT NULL,
+    timestamp INTEGER NOT NULL,
+    responseTime INTEGER NOT NULL,
+    success INTEGER NOT NULL DEFAULT 1,
+    queryType TEXT,
+    createdAt INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_upstream_metrics_upstream ON upstream_metrics(upstream);
+  CREATE INDEX IF NOT EXISTS idx_upstream_metrics_timestamp ON upstream_metrics(timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_upstream_metrics_success ON upstream_metrics(success);
+
   -- Better-auth tables
   CREATE TABLE IF NOT EXISTS "user" (
     "id" text not null primary key,
@@ -1376,6 +1391,75 @@ export const dbQueries = {
         hours,
       },
     };
+  },
+};
+
+export const dbUpstreamMetrics = {
+  insert(upstream: string, responseTime: number, success: boolean, queryType?: string) {
+    const stmt = db.prepare(`
+      INSERT INTO upstream_metrics (upstream, timestamp, responseTime, success, queryType, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(upstream, Date.now(), responseTime, success ? 1 : 0, queryType || null, Date.now());
+  },
+
+  getStats(hours: number = 24) {
+    const startTime = Date.now() - hours * 60 * 60 * 1000;
+    const stmt = db.prepare(`
+      SELECT 
+        upstream,
+        COUNT(*) as totalQueries,
+        SUM(success) as successCount,
+        COUNT(*) - SUM(success) as failureCount,
+        AVG(responseTime) as avgResponseTime,
+        MIN(responseTime) as minResponseTime,
+        MAX(responseTime) as maxResponseTime,
+        (SUM(success) * 100.0 / COUNT(*)) as successRate
+      FROM upstream_metrics
+      WHERE timestamp >= ?
+      GROUP BY upstream
+      ORDER BY totalQueries DESC
+    `);
+    return stmt.all(startTime) as Array<{
+      upstream: string;
+      totalQueries: number;
+      successCount: number;
+      failureCount: number;
+      avgResponseTime: number;
+      minResponseTime: number;
+      maxResponseTime: number;
+      successRate: number;
+    }>;
+  },
+
+  getHourlyStats(hours: number = 24) {
+    const startTime = Date.now() - hours * 60 * 60 * 1000;
+    const stmt = db.prepare(`
+      SELECT 
+        upstream,
+        strftime('%Y-%m-%d %H:00:00', datetime(timestamp / 1000, 'unixepoch')) as hour,
+        COUNT(*) as totalQueries,
+        SUM(success) as successCount,
+        AVG(responseTime) as avgResponseTime
+      FROM upstream_metrics
+      WHERE timestamp >= ?
+      GROUP BY upstream, hour
+      ORDER BY upstream, hour
+    `);
+    return stmt.all(startTime) as Array<{
+      upstream: string;
+      hour: string;
+      totalQueries: number;
+      successCount: number;
+      avgResponseTime: number;
+    }>;
+  },
+
+  cleanupOldMetrics(daysToKeep: number = 7) {
+    const cutoffTime = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
+    const stmt = db.prepare('DELETE FROM upstream_metrics WHERE timestamp < ?');
+    const result = stmt.run(cutoffTime);
+    return result.changes;
   },
 };
 

@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ZonesRouteImport } from './routes/zones'
+import { Route as UpstreamStatsRouteImport } from './routes/upstream-stats'
 import { Route as UiComponentsRouteImport } from './routes/ui-components'
 import { Route as ToolsRouteImport } from './routes/tools'
 import { Route as SetupRouteImport } from './routes/setup'
@@ -38,6 +39,11 @@ import { Route as ClientsClientIpStatsRouteImport } from './routes/clients.$clie
 const ZonesRoute = ZonesRouteImport.update({
   id: '/zones',
   path: '/zones',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UpstreamStatsRoute = UpstreamStatsRouteImport.update({
+  id: '/upstream-stats',
+  path: '/upstream-stats',
   getParentRoute: () => rootRouteImport,
 } as any)
 const UiComponentsRoute = UiComponentsRouteImport.update({
@@ -185,6 +191,7 @@ export interface FileRoutesByFullPath {
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
   '/ui-components': typeof UiComponentsRoute
+  '/upstream-stats': typeof UpstreamStatsRoute
   '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
 }
@@ -212,6 +219,7 @@ export interface FileRoutesByTo {
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
   '/ui-components': typeof UiComponentsRoute
+  '/upstream-stats': typeof UpstreamStatsRoute
   '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
 }
@@ -240,6 +248,7 @@ export interface FileRoutesById {
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
   '/ui-components': typeof UiComponentsRoute
+  '/upstream-stats': typeof UpstreamStatsRoute
   '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
 }
@@ -269,6 +278,7 @@ export interface FileRouteTypes {
     | '/setup'
     | '/tools'
     | '/ui-components'
+    | '/upstream-stats'
     | '/zones'
     | '/clients/$clientIp/stats'
   fileRoutesByTo: FileRoutesByTo
@@ -296,6 +306,7 @@ export interface FileRouteTypes {
     | '/setup'
     | '/tools'
     | '/ui-components'
+    | '/upstream-stats'
     | '/zones'
     | '/clients/$clientIp/stats'
   id:
@@ -323,6 +334,7 @@ export interface FileRouteTypes {
     | '/setup'
     | '/tools'
     | '/ui-components'
+    | '/upstream-stats'
     | '/zones'
     | '/clients/$clientIp/stats'
   fileRoutesById: FileRoutesById
@@ -351,6 +363,7 @@ export interface RootRouteChildren {
   SetupRoute: typeof SetupRoute
   ToolsRoute: typeof ToolsRoute
   UiComponentsRoute: typeof UiComponentsRoute
+  UpstreamStatsRoute: typeof UpstreamStatsRoute
   ZonesRoute: typeof ZonesRoute
 }
 
@@ -361,6 +374,13 @@ declare module '@tanstack/react-router' {
       path: '/zones'
       fullPath: '/zones'
       preLoaderRoute: typeof ZonesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/upstream-stats': {
+      id: '/upstream-stats'
+      path: '/upstream-stats'
+      fullPath: '/upstream-stats'
+      preLoaderRoute: typeof UpstreamStatsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/ui-components': {
@@ -569,6 +589,7 @@ const rootRouteChildren: RootRouteChildren = {
   SetupRoute: SetupRoute,
   ToolsRoute: ToolsRoute,
   UiComponentsRoute: UiComponentsRoute,
+  UpstreamStatsRoute: UpstreamStatsRoute,
   ZonesRoute: ZonesRoute,
 }
 export const routeTree = rootRouteImport

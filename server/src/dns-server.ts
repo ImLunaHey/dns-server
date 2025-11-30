@@ -24,6 +24,7 @@ import {
   dbZones,
   dbZoneRecords,
   dbZoneKeys,
+  dbUpstreamMetrics,
 } from './db.js';
 import { logger } from './logger.js';
 import { validateDNSSEC, validateChainOfTrust } from './dnssec-validator.js';
@@ -1402,19 +1403,27 @@ export class DNSServer {
       targetDNSList = this.getAvailableUpstreamServers();
     }
 
+    // Extract query type from message for metrics
+    const queryType = msg.length >= 4 ? this.getQueryType(msg) : undefined;
+
     // Try each upstream DNS server in order until one succeeds
     const errors: Error[] = [];
     for (const targetDNS of targetDNSList) {
+      const startTime = Date.now();
       try {
         // Check if targetDNS is a DoH URL (https://)
         if (targetDNS.startsWith('https://')) {
           try {
             const dohResponse = await this.forwardQueryDoH(msg, targetDNS);
+            const responseTime = Date.now() - startTime;
             this.markUpstreamSuccess(targetDNS);
+            dbUpstreamMetrics.insert(targetDNS, responseTime, true, queryType);
             return dohResponse;
           } catch (error) {
+            const responseTime = Date.now() - startTime;
             errors.push(error instanceof Error ? error : new Error(String(error)));
             this.markUpstreamFailure(targetDNS);
+            dbUpstreamMetrics.insert(targetDNS, responseTime, false, queryType);
             logger.debug('DoH query failed, trying next upstream', {
               error: error instanceof Error ? error : new Error(String(error)),
               targetDNS,
@@ -1427,11 +1436,15 @@ export class DNSServer {
         if (targetDNS.startsWith('tls://') || targetDNS.startsWith('dot://')) {
           try {
             const dotResponse = await this.forwardQueryDoT(msg, targetDNS);
+            const responseTime = Date.now() - startTime;
             this.markUpstreamSuccess(targetDNS);
+            dbUpstreamMetrics.insert(targetDNS, responseTime, true, queryType);
             return dotResponse;
           } catch (error) {
+            const responseTime = Date.now() - startTime;
             errors.push(error instanceof Error ? error : new Error(String(error)));
             this.markUpstreamFailure(targetDNS);
+            dbUpstreamMetrics.insert(targetDNS, responseTime, false, queryType);
             logger.debug('DoT query failed, trying next upstream', {
               error: error instanceof Error ? error : new Error(String(error)),
               targetDNS,
@@ -1443,11 +1456,15 @@ export class DNSServer {
         // Try UDP/TCP
         try {
           const response = await this.forwardQueryUDPTCP(msg, targetDNS, useTcp);
+          const responseTime = Date.now() - startTime;
           this.markUpstreamSuccess(targetDNS);
+          dbUpstreamMetrics.insert(targetDNS, responseTime, true, queryType);
           return response;
         } catch (error) {
+          const responseTime = Date.now() - startTime;
           errors.push(error instanceof Error ? error : new Error(String(error)));
           this.markUpstreamFailure(targetDNS);
+          dbUpstreamMetrics.insert(targetDNS, responseTime, false, queryType);
           logger.debug('UDP/TCP query failed, trying next upstream', {
             error: error instanceof Error ? error : new Error(String(error)),
             targetDNS,
@@ -1455,14 +1472,53 @@ export class DNSServer {
           continue; // Try next upstream
         }
       } catch (error) {
+        const responseTime = Date.now() - startTime;
         errors.push(error instanceof Error ? error : new Error(String(error)));
         this.markUpstreamFailure(targetDNS);
+        dbUpstreamMetrics.insert(targetDNS, responseTime, false, queryType);
         continue;
       }
     }
 
     // All upstreams failed
     throw new Error(`All upstream DNS servers failed: ${errors.map((e) => e.message).join(', ')}`);
+  }
+
+  /**
+   * Extract query type from DNS message
+   */
+  private getQueryType(msg: Buffer): string | undefined {
+    if (msg.length < 12) return undefined;
+    
+    // Skip header (12 bytes) and question name
+    let offset = 12;
+    while (offset < msg.length && msg[offset] !== 0) {
+      const length = msg[offset];
+      offset += length + 1;
+    }
+    
+    // Skip null terminator
+    if (offset >= msg.length) return undefined;
+    offset++;
+    
+    // Read QTYPE (2 bytes)
+    if (offset + 2 > msg.length) return undefined;
+    const qtype = msg.readUInt16BE(offset);
+    
+    // Map numeric type to string
+    const typeMap: Record<number, string> = {
+      1: 'A',
+      2: 'NS',
+      5: 'CNAME',
+      6: 'SOA',
+      15: 'MX',
+      16: 'TXT',
+      28: 'AAAA',
+      33: 'SRV',
+      257: 'CAA',
+    };
+    
+    return typeMap[qtype] || `TYPE${qtype}`;
   }
 
   /**

@@ -30,6 +30,7 @@ import {
   dbZoneRecords,
   dbTSIGKeys,
   dbDDNSTokens,
+  dbUpstreamMetrics,
 } from './db.js';
 import db from './db.js';
 import { auth } from './auth.js';
@@ -823,6 +824,20 @@ app.get('/api/stats/patterns', requireAuth, (c) => {
   const hours = parseInt(c.req.query('hours') || '24', 10);
   const patterns = dbQueries.getQueryPatterns(hours);
   return c.json(patterns);
+});
+
+app.get('/api/stats/upstream', requireAuth, (c) => {
+  const hoursParam = c.req.query('hours');
+  const hours = hoursParam ? parseInt(hoursParam, 10) : 24;
+  const stats = dbUpstreamMetrics.getStats(hours);
+  return c.json(stats);
+});
+
+app.get('/api/stats/upstream/hourly', requireAuth, (c) => {
+  const hoursParam = c.req.query('hours');
+  const hours = hoursParam ? parseInt(hoursParam, 10) : 24;
+  const stats = dbUpstreamMetrics.getHourlyStats(hours);
+  return c.json(stats);
 });
 
 app.get('/api/setup/check', (c) => {
