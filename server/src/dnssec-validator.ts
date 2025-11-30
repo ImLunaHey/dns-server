@@ -37,6 +37,20 @@ interface DSRecord {
   digest: Buffer;
 }
 
+interface NSECRecord {
+  nextDomainName: string;
+  typeBitMap: number[];
+}
+
+interface NSEC3Record {
+  hashAlgorithm: number;
+  flags: number;
+  iterations: number;
+  salt: Buffer;
+  nextHashedOwnerName: Buffer;
+  typeBitMap: number[];
+}
+
 interface ResourceRecord {
   name: string;
   type: number;
@@ -186,6 +200,221 @@ function parseDNSKEY(data: Buffer): DNSKEYRecord | null {
     algorithm,
     publicKey,
   };
+}
+
+/**
+ * Parse NSEC record
+ */
+function parseNSEC(data: Buffer, response: Buffer, dataStartOffset: number): NSECRecord | null {
+  try {
+    if (data.length < 2) return null;
+
+    // Parse next domain name (starts at beginning of data)
+    let nameOffset = 0;
+    const nameResult = parseDomainName(data, nameOffset);
+    if (!nameResult) return null;
+
+    // Parse type bit map (starts after domain name)
+    const bitmapOffset = nameResult.newOffset;
+    const typeBitMap: number[] = [];
+    let currentOffset = bitmapOffset;
+
+    while (currentOffset < data.length) {
+      if (currentOffset + 2 > data.length) break;
+      const windowBlock = data[currentOffset];
+      const bitmapLength = data[currentOffset + 1];
+      currentOffset += 2;
+
+      if (currentOffset + bitmapLength > data.length) break;
+
+      // Parse bitmap
+      for (let i = 0; i < bitmapLength; i++) {
+        const byte = data[currentOffset + i];
+        for (let bit = 0; bit < 8; bit++) {
+          if (byte & (1 << (7 - bit))) {
+            typeBitMap.push(windowBlock * 256 + i * 8 + bit);
+          }
+        }
+      }
+      currentOffset += bitmapLength;
+    }
+
+    return {
+      nextDomainName: nameResult.name,
+      typeBitMap,
+    };
+  } catch (error) {
+    logger.debug('Error parsing NSEC record', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return null;
+  }
+}
+
+/**
+ * Parse NSEC3 record
+ */
+function parseNSEC3(data: Buffer): NSEC3Record | null {
+  try {
+    if (data.length < 8) return null;
+
+    const hashAlgorithm = data[0];
+    const flags = data[1];
+    const iterations = data.readUInt16BE(2);
+    const saltLength = data[4];
+    const salt = saltLength > 0 ? data.slice(5, 5 + saltLength) : Buffer.alloc(0);
+    let offset = 5 + saltLength;
+
+    if (offset + 1 > data.length) return null;
+    const hashLength = data[offset];
+    offset++;
+
+    if (offset + hashLength > data.length) return null;
+    const nextHashedOwnerName = data.slice(offset, offset + hashLength);
+    offset += hashLength;
+
+    // Parse type bit map
+    const typeBitMap: number[] = [];
+    while (offset < data.length) {
+      if (offset + 2 > data.length) break;
+      const windowBlock = data[offset];
+      const bitmapLength = data[offset + 1];
+      offset += 2;
+
+      if (offset + bitmapLength > data.length) break;
+
+      for (let i = 0; i < bitmapLength; i++) {
+        const byte = data[offset + i];
+        for (let bit = 0; bit < 8; bit++) {
+          if (byte & (1 << (7 - bit))) {
+            typeBitMap.push(windowBlock * 256 + i * 8 + bit);
+          }
+        }
+      }
+      offset += bitmapLength;
+    }
+
+    return {
+      hashAlgorithm,
+      flags,
+      iterations,
+      salt,
+      nextHashedOwnerName,
+      typeBitMap,
+    };
+  } catch (error) {
+    logger.debug('Error parsing NSEC3 record', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return null;
+  }
+}
+
+/**
+ * Check if a domain name is covered by NSEC record
+ * (domain doesn't exist if it's between NSEC owner and next domain name)
+ */
+function nsecCoversDomain(nsec: NSECRecord, domain: string, nsecOwner: string): boolean {
+  const domainLower = domain.toLowerCase();
+  const ownerLower = nsecOwner.toLowerCase();
+  const nextLower = nsec.nextDomainName.toLowerCase();
+
+  // Check if domain is between owner and next (canonical ordering)
+  // DNS canonical ordering: compare labels right-to-left
+  const ownerLabels = ownerLower.split('.').reverse();
+  const nextLabels = nextLower.split('.').reverse();
+  const domainLabels = domainLower.split('.').reverse();
+
+  // Compare labels
+  for (let i = 0; i < Math.max(ownerLabels.length, nextLabels.length, domainLabels.length); i++) {
+    const ownerLabel = ownerLabels[i] || '';
+    const nextLabel = nextLabels[i] || '';
+    const domainLabel = domainLabels[i] || '';
+
+    // Domain must be > owner and < next (or wrap around if next < owner)
+    if (nextLabel < ownerLabel) {
+      // Wrap around case: domain > owner OR domain < next
+      return domainLabel > ownerLabel || domainLabel < nextLabel;
+    } else {
+      // Normal case: owner < domain < next
+      if (domainLabel < ownerLabel) return false;
+      if (domainLabel > nextLabel) return false;
+      if (domainLabel > ownerLabel && domainLabel < nextLabel) return true;
+      if (domainLabel === ownerLabel && i < ownerLabels.length - 1) continue;
+      if (domainLabel === nextLabel && i < nextLabels.length - 1) continue;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Validate NSEC/NSEC3 records for authenticated denial
+ */
+function validateNSECDenial(
+  nsecRecords: ResourceRecord[],
+  queriedDomain: string,
+  queriedType: number,
+  rrsigs: RRSIGRecord[],
+  dnskeyRecords: DNSKEYRecord[],
+  response: Buffer,
+): boolean {
+  try {
+    // Find NSEC records that cover the queried domain
+    const coveringNSEC = nsecRecords
+      .filter((rr) => rr.type === NSEC)
+      .map((rr) => {
+        // Parse NSEC data
+        const nsec = parseNSEC(rr.data, response, 0);
+        return nsec ? { record: rr, nsec } : null;
+      })
+      .filter((item): item is { record: ResourceRecord; nsec: NSECRecord } => item !== null)
+      .filter((item) => nsecCoversDomain(item.nsec, queriedDomain, item.record.name));
+
+    if (coveringNSEC.length === 0) {
+      return false;
+    }
+
+    // Verify RRSIG signatures on NSEC records
+    for (const { record, nsec } of coveringNSEC) {
+      // Find RRSIG covering this NSEC
+      const nsecRRSIGs = rrsigs.filter((rrsig) => rrsig.typeCovered === NSEC);
+
+      for (const rrsig of nsecRRSIGs) {
+        // Find matching DNSKEY
+        const matchingDNSKEY = dnskeyRecords.find((key) => {
+          const keyTag = calculateKeyTag(key);
+          return keyTag === rrsig.keyTag;
+        });
+
+        if (!matchingDNSKEY) continue;
+
+        // Check signature validity
+        const now = Math.floor(Date.now() / 1000);
+        if (now < rrsig.inception || now > rrsig.expiration) continue;
+
+        // Build canonical RRset for NSEC
+        const nsecRRset = buildCanonicalRRset([record], rrsig, response);
+        const rrsigData = buildRRSIGData(rrsig);
+
+        // Verify signature
+        if (verifySignature(nsecRRset, rrsigData, rrsig.signature, matchingDNSKEY)) {
+          // Check if queried type is in the type bitmap (if so, record exists, not a denial)
+          if (nsec.typeBitMap.includes(queriedType)) {
+            return false; // Type exists, not a denial
+          }
+          return true; // Valid authenticated denial
+        }
+      }
+    }
+
+    return false;
+  } catch (error) {
+    logger.error('Error validating NSEC denial', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return false;
+  }
 }
 
 /**
@@ -737,8 +966,12 @@ export function validateDNSSEC(
     }
 
     // Find RRSIG records for the queried type
-    const rrsigs = [...answers, ...authority, ...additional].filter((rr) => rr.type === RRSIG);
+    const rrsigRecords = [...answers, ...authority, ...additional].filter((rr) => rr.type === RRSIG);
     const dnskeyRecords = [...answers, ...authority, ...additional].filter((rr) => rr.type === DNSKEY);
+
+    // Parse RRSIG and DNSKEY records
+    const rrsigs = rrsigRecords.map((rr) => parseRRSIG(rr.data)).filter((rrsig): rrsig is RRSIGRecord => rrsig !== null);
+    const dnskeyParsed = dnskeyRecords.map((rr) => parseDNSKEY(rr.data)).filter((key): key is DNSKEYRecord => key !== null);
 
     if (rrsigs.length === 0) {
       // No DNSSEC signatures found - response is not signed
@@ -746,9 +979,7 @@ export function validateDNSSEC(
     }
 
     // Find RRSIGs that cover the queried type
-    const relevantRRSIGs = rrsigs
-      .map((rr) => parseRRSIG(rr.data))
-      .filter((rrsig): rrsig is RRSIGRecord => rrsig !== null && rrsig.typeCovered === queryType);
+    const relevantRRSIGs = rrsigs.filter((rrsig) => rrsig.typeCovered === queryType);
 
     if (relevantRRSIGs.length === 0) {
       return { valid: false, reason: 'No RRSIG covering queried type' };
@@ -761,14 +992,24 @@ export function validateDNSSEC(
       // Check for NSEC/NSEC3 records for authenticated denial
       const nsecRecords = [...answers, ...authority].filter((rr) => rr.type === NSEC || rr.type === NSEC3);
       if (nsecRecords.length > 0) {
-        // TODO: Validate NSEC/NSEC3 records
-        return { valid: true, reason: 'Authenticated denial (NSEC/NSEC3)' };
+        // Validate NSEC/NSEC3 records
+        const nsecValid = validateNSECDenial(
+          nsecRecords.filter((rr) => rr.type === NSEC),
+          domain,
+          queryType,
+          rrsigs,
+          dnskeyParsed,
+          response,
+        );
+        if (nsecValid) {
+          return { valid: true, reason: 'Authenticated denial (NSEC)' };
+        }
+        // TODO: Add NSEC3 validation
+        // For now, if NSEC validation fails, return invalid
+        return { valid: false, reason: 'NSEC/NSEC3 records present but validation failed' };
       }
       return { valid: false, reason: 'No records found and no authenticated denial' };
     }
-
-    // Parse DNSKEY records
-    const dnskeyParsed = dnskeyRecords.map((rr) => parseDNSKEY(rr.data)).filter((key): key is DNSKEYRecord => key !== null);
 
     if (dnskeyParsed.length === 0) {
       return { valid: false, reason: 'No DNSKEY records found' };
@@ -890,7 +1131,10 @@ function calculateDSHash(zoneName: string, dnskey: DNSKEYRecord, digestType: num
  * Get parent domain name
  */
 function getParentDomain(domain: string): string | null {
-  const parts = domain.toLowerCase().split('.').filter((p) => p.length > 0);
+  const parts = domain
+    .toLowerCase()
+    .split('.')
+    .filter((p) => p.length > 0);
   if (parts.length <= 1) {
     return null; // Already at root or TLD
   }
@@ -953,11 +1197,7 @@ function parseDNSResponse(response: Buffer): {
  * Query DNS records from upstream (for chain of trust validation)
  * This is a simplified version - in production, you'd want to use the DNS server's forwardQuery
  */
-async function queryDNSRecord(
-  domain: string,
-  type: string,
-  upstreamDNS: string = '1.1.1.1',
-): Promise<Buffer | null> {
+async function queryDNSRecord(domain: string, type: string, upstreamDNS: string = '1.1.1.1'): Promise<Buffer | null> {
   return new Promise((resolve, reject) => {
     const client = dgram.createSocket('udp4');
 
