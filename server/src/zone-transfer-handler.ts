@@ -1,5 +1,5 @@
 import { logger } from './logger.js';
-import { dbZones, dbZoneRecords } from './db.js';
+import { dbZones, dbZoneRecords, dbZoneChanges } from './db.js';
 
 // Zone transfer types
 const AXFR = 252; // Full zone transfer
@@ -115,14 +115,129 @@ export function handleIXFR(zoneId: number, queryId: number, requestedSerial: num
       return [soaResponse, soaResponse]; // Start and end SOA
     }
 
-    // For now, we'll do a full transfer if serial doesn't match
-    // In a production system, you'd track changes per serial number
-    logger.info('IXFR requested, falling back to AXFR', {
+    // Get changes since requested serial
+    const changes = dbZoneChanges.getChangesSince(zoneId, requestedSerial);
+
+    // If no changes found or too many changes, fall back to AXFR
+    // RFC 1995 suggests falling back to AXFR if IXFR would be larger
+    if (changes.length === 0 || changes.length > 1000) {
+      logger.info('IXFR requested, falling back to AXFR', {
+        zone: zone.domain,
+        requestedSerial,
+        currentSerial: zone.soa_serial,
+        changeCount: changes.length,
+        reason: changes.length === 0 ? 'no changes' : 'too many changes',
+      });
+      return handleAXFR(zoneId, queryId);
+    }
+
+    const responses: Buffer[] = [];
+
+    // First response: Old SOA (requested serial)
+    const oldSoaResponse = createZoneTransferRecord(
+      queryId,
+      zone.domain,
+      'SOA',
+      zone.soa_minimum,
+      `${zone.soa_mname} ${zone.soa_rname} ${requestedSerial} ${zone.soa_refresh} ${zone.soa_retry} ${zone.soa_expire} ${zone.soa_minimum}`,
+      zone.domain,
+    );
+    responses.push(oldSoaResponse);
+
+    // Group changes by serial to process in order
+    const changesBySerial = new Map<number, typeof changes>();
+    for (const change of changes) {
+      if (!changesBySerial.has(change.serial)) {
+        changesBySerial.set(change.serial, []);
+      }
+      changesBySerial.get(change.serial)!.push(change);
+    }
+
+    // Process changes in serial order
+    const sortedSerials = Array.from(changesBySerial.keys()).sort((a, b) => a - b);
+    for (const serial of sortedSerials) {
+      const serialChanges = changesBySerial.get(serial)!;
+
+      // For each serial, output: old SOA, changes, new SOA
+      // Old SOA for this serial
+      const serialOldSoa = createZoneTransferRecord(
+        queryId,
+        zone.domain,
+        'SOA',
+        zone.soa_minimum,
+        `${zone.soa_mname} ${zone.soa_rname} ${serial - 1} ${zone.soa_refresh} ${zone.soa_retry} ${zone.soa_expire} ${
+          zone.soa_minimum
+        }`,
+        zone.domain,
+      );
+      responses.push(serialOldSoa);
+
+      // Process changes: deletes first, then adds/modifies
+      const deletes = serialChanges.filter((c) => c.change_type === 'delete');
+      const addsModifies = serialChanges.filter((c) => c.change_type !== 'delete');
+
+      // Output deletes (old record values)
+      for (const change of deletes) {
+        const fullName = change.record_name === '@' ? zone.domain : `${change.record_name}.${zone.domain}`;
+        const deleteResponse = createZoneTransferRecord(
+          queryId,
+          fullName,
+          change.record_type,
+          change.record_ttl,
+          change.record_data,
+          zone.domain,
+          change.record_priority,
+        );
+        responses.push(deleteResponse);
+      }
+
+      // Output adds/modifies (new record values)
+      for (const change of addsModifies) {
+        const fullName = change.record_name === '@' ? zone.domain : `${change.record_name}.${zone.domain}`;
+        const addModifyResponse = createZoneTransferRecord(
+          queryId,
+          fullName,
+          change.record_type,
+          change.record_ttl,
+          change.record_data,
+          zone.domain,
+          change.record_priority,
+        );
+        responses.push(addModifyResponse);
+      }
+
+      // New SOA for this serial
+      const serialNewSoa = createZoneTransferRecord(
+        queryId,
+        zone.domain,
+        'SOA',
+        zone.soa_minimum,
+        `${zone.soa_mname} ${zone.soa_rname} ${serial} ${zone.soa_refresh} ${zone.soa_retry} ${zone.soa_expire} ${zone.soa_minimum}`,
+        zone.domain,
+      );
+      responses.push(serialNewSoa);
+    }
+
+    // Final response: Current SOA
+    const finalSoaResponse = createZoneTransferRecord(
+      queryId,
+      zone.domain,
+      'SOA',
+      zone.soa_minimum,
+      `${zone.soa_mname} ${zone.soa_rname} ${zone.soa_serial} ${zone.soa_refresh} ${zone.soa_retry} ${zone.soa_expire} ${zone.soa_minimum}`,
+      zone.domain,
+    );
+    responses.push(finalSoaResponse);
+
+    logger.info('IXFR zone transfer completed', {
       zone: zone.domain,
       requestedSerial,
       currentSerial: zone.soa_serial,
+      changeCount: changes.length,
+      responseCount: responses.length,
     });
-    return handleAXFR(zoneId, queryId);
+
+    return responses;
   } catch (error) {
     logger.error('Error handling IXFR', {
       error: error instanceof Error ? error : new Error(String(error)),
@@ -229,68 +344,63 @@ function createZoneTransferRecord(
     dataBytes = Buffer.concat([Buffer.from([txtData.length]), txtData]);
   } else if (type === 'NS' || type === 'CNAME') {
     dataBytes = domainToBytes(data);
-    } else if (type === 'SOA') {
-      const parts = data.split(' ');
-      if (parts.length >= 7) {
-        const mname = domainToBytes(parts[0]);
-        const rname = domainToBytes(parts[1]);
-        const serial = parseInt(parts[2], 10);
-        const refresh = parseInt(parts[3], 10);
-        const retry = parseInt(parts[4], 10);
-        const expire = parseInt(parts[5], 10);
-        const minimum = parseInt(parts[6], 10);
-        dataBytes = Buffer.concat([
-          mname,
-          rname,
-          Buffer.from([
-            (serial >> 24) & 0xff,
-            (serial >> 16) & 0xff,
-            (serial >> 8) & 0xff,
-            serial & 0xff,
-            (refresh >> 24) & 0xff,
-            (refresh >> 16) & 0xff,
-            (refresh >> 8) & 0xff,
-            refresh & 0xff,
-            (retry >> 24) & 0xff,
-            (retry >> 16) & 0xff,
-            (retry >> 8) & 0xff,
-            retry & 0xff,
-            (expire >> 24) & 0xff,
-            (expire >> 16) & 0xff,
-            (expire >> 8) & 0xff,
-            expire & 0xff,
-            (minimum >> 24) & 0xff,
-            (minimum >> 16) & 0xff,
-            (minimum >> 8) & 0xff,
-            minimum & 0xff,
-          ]),
-        ]);
-      } else {
-        dataBytes = Buffer.from(data, 'utf8');
-      }
-    } else if (type === 'CAA') {
-      // CAA record format: flags (1 byte) + tag length (1 byte) + tag + value
-      // Data format: "flags tag value" or "0 issue letsencrypt.org"
-      const parts = data.split(' ');
-      if (parts.length >= 3) {
-        const flags = parseInt(parts[0], 10) || 0;
-        const tag = parts[1];
-        const value = parts.slice(2).join(' ');
-        const tagBytes = Buffer.from(tag, 'utf8');
-        const valueBytes = Buffer.from(value, 'utf8');
-        dataBytes = Buffer.concat([
-          Buffer.from([flags & 0xff]),
-          Buffer.from([tagBytes.length]),
-          tagBytes,
-          valueBytes,
-        ]);
-      } else {
-        // Fallback: treat as raw data
-        dataBytes = Buffer.from(data, 'utf8');
-      }
+  } else if (type === 'SOA') {
+    const parts = data.split(' ');
+    if (parts.length >= 7) {
+      const mname = domainToBytes(parts[0]);
+      const rname = domainToBytes(parts[1]);
+      const serial = parseInt(parts[2], 10);
+      const refresh = parseInt(parts[3], 10);
+      const retry = parseInt(parts[4], 10);
+      const expire = parseInt(parts[5], 10);
+      const minimum = parseInt(parts[6], 10);
+      dataBytes = Buffer.concat([
+        mname,
+        rname,
+        Buffer.from([
+          (serial >> 24) & 0xff,
+          (serial >> 16) & 0xff,
+          (serial >> 8) & 0xff,
+          serial & 0xff,
+          (refresh >> 24) & 0xff,
+          (refresh >> 16) & 0xff,
+          (refresh >> 8) & 0xff,
+          refresh & 0xff,
+          (retry >> 24) & 0xff,
+          (retry >> 16) & 0xff,
+          (retry >> 8) & 0xff,
+          retry & 0xff,
+          (expire >> 24) & 0xff,
+          (expire >> 16) & 0xff,
+          (expire >> 8) & 0xff,
+          expire & 0xff,
+          (minimum >> 24) & 0xff,
+          (minimum >> 16) & 0xff,
+          (minimum >> 8) & 0xff,
+          minimum & 0xff,
+        ]),
+      ]);
     } else {
       dataBytes = Buffer.from(data, 'utf8');
     }
+  } else if (type === 'CAA') {
+    // CAA record format: flags (1 byte) + tag length (1 byte) + tag + value
+    // Data format: "flags tag value" or "0 issue letsencrypt.org"
+    const parts = data.split(' ');
+    if (parts.length >= 3) {
+      const flags = parseInt(parts[0], 10) || 0;
+      const tag = parts[1];
+      const value = parts.slice(2).join(' ');
+      const tagBytes = Buffer.from(tag, 'utf8');
+      const valueBytes = Buffer.from(value, 'utf8');
+      dataBytes = Buffer.concat([Buffer.from([flags & 0xff]), Buffer.from([tagBytes.length]), tagBytes, valueBytes]);
+    } else {
+      // Fallback: treat as raw data
+      dataBytes = Buffer.from(data, 'utf8');
+    }
+  } else {
+    dataBytes = Buffer.from(data, 'utf8');
+  }
 
   // Write data length
   response.writeUInt16BE(dataBytes.length, dataStart);

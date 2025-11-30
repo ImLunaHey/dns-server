@@ -248,6 +248,26 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_zone_records_name ON zone_records(name);
   CREATE INDEX IF NOT EXISTS idx_zone_records_type ON zone_records(type);
 
+  -- Zone change history for IXFR
+  CREATE TABLE IF NOT EXISTS zone_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    zone_id INTEGER NOT NULL,
+    serial INTEGER NOT NULL,
+    change_type TEXT NOT NULL CHECK(change_type IN ('add', 'modify', 'delete')),
+    record_id INTEGER,
+    record_name TEXT,
+    record_type TEXT,
+    record_ttl INTEGER,
+    record_data TEXT,
+    record_priority INTEGER,
+    changed_at INTEGER NOT NULL,
+    FOREIGN KEY (zone_id) REFERENCES zones(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_zone_changes_zone_id ON zone_changes(zone_id);
+  CREATE INDEX IF NOT EXISTS idx_zone_changes_serial ON zone_changes(zone_id, serial);
+  CREATE INDEX IF NOT EXISTS idx_zone_changes_changed_at ON zone_changes(changed_at);
+
   -- DNSSEC zone keys
   CREATE TABLE IF NOT EXISTS zone_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2741,21 +2761,114 @@ export const dbZones = {
     stmt.run(id);
   },
 
-  incrementSerial(id: number) {
-    const stmt = db.prepare('UPDATE zones SET soa_serial = soa_serial + 1, updatedAt = ? WHERE id = ?');
-    stmt.run(Date.now(), id);
+  incrementSerial(id: number): number {
+    const zone = this.getById(id);
+    if (!zone) return 0;
+    const newSerial = zone.soa_serial + 1;
+    const stmt = db.prepare('UPDATE zones SET soa_serial = ?, updatedAt = ? WHERE id = ?');
+    stmt.run(newSerial, Date.now(), id);
+    return newSerial;
+  },
+};
+
+export const dbZoneChanges = {
+  recordAdd(
+    zoneId: number,
+    serial: number,
+    recordId: number,
+    name: string,
+    type: string,
+    ttl: number,
+    data: string,
+    priority: number | null,
+  ) {
+    const stmt = db.prepare(`
+      INSERT INTO zone_changes (zone_id, serial, change_type, record_id, record_name, record_type, record_ttl, record_data, record_priority, changed_at)
+      VALUES (?, ?, 'add', ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(zoneId, serial, recordId, name, type, ttl, data, priority, Date.now());
+  },
+
+  recordModify(
+    zoneId: number,
+    serial: number,
+    recordId: number,
+    name: string,
+    type: string,
+    ttl: number,
+    data: string,
+    priority: number | null,
+  ) {
+    const stmt = db.prepare(`
+      INSERT INTO zone_changes (zone_id, serial, change_type, record_id, record_name, record_type, record_ttl, record_data, record_priority, changed_at)
+      VALUES (?, ?, 'modify', ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(zoneId, serial, recordId, name, type, ttl, data, priority, Date.now());
+  },
+
+  recordDelete(
+    zoneId: number,
+    serial: number,
+    recordId: number,
+    name: string,
+    type: string,
+    ttl: number,
+    data: string,
+    priority: number | null,
+  ) {
+    const stmt = db.prepare(`
+      INSERT INTO zone_changes (zone_id, serial, change_type, record_id, record_name, record_type, record_ttl, record_data, record_priority, changed_at)
+      VALUES (?, ?, 'delete', ?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(zoneId, serial, recordId, name, type, ttl, data, priority, Date.now());
+  },
+
+  getChangesSince(zoneId: number, requestedSerial: number) {
+    const stmt = db.prepare(`
+      SELECT * FROM zone_changes
+      WHERE zone_id = ? AND serial > ?
+      ORDER BY serial ASC, changed_at ASC
+    `);
+    return stmt.all(zoneId, requestedSerial) as Array<{
+      id: number;
+      zone_id: number;
+      serial: number;
+      change_type: 'add' | 'modify' | 'delete';
+      record_id: number | null;
+      record_name: string;
+      record_type: string;
+      record_ttl: number;
+      record_data: string;
+      record_priority: number | null;
+      changed_at: number;
+    }>;
+  },
+
+  cleanupOldChanges(daysToKeep: number = 30) {
+    const cutoffTime = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
+    const stmt = db.prepare('DELETE FROM zone_changes WHERE changed_at < ?');
+    const result = stmt.run(cutoffTime);
+    return result.changes;
   },
 };
 
 export const dbZoneRecords = {
   create(zoneId: number, name: string, type: string, ttl: number, data: string, priority?: number) {
+    // Increment serial first to get the new serial for change tracking
+    const newSerial = dbZones.incrementSerial(zoneId);
+    
     const now = Date.now();
     const stmt = db.prepare(`
       INSERT INTO zone_records (zone_id, name, type, ttl, data, priority, createdAt, updatedAt)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const result = stmt.run(zoneId, name.toLowerCase(), type.toUpperCase(), ttl, data, priority ?? null, now, now);
-    return result.lastInsertRowid as number;
+    const recordId = result.lastInsertRowid as number;
+    
+    // Track change for IXFR with the new serial
+    dbZoneChanges.recordAdd(zoneId, newSerial, recordId, name.toLowerCase(), type.toUpperCase(), ttl, data, priority ?? null);
+    
+    return recordId;
   },
 
   getByZone(zoneId: number) {
@@ -2835,6 +2948,9 @@ export const dbZoneRecords = {
       enabled?: boolean;
     },
   ) {
+    const existing = this.getById(id);
+    if (!existing) return;
+
     const now = Date.now();
     const fields: string[] = [];
     const values: unknown[] = [];
@@ -2872,11 +2988,32 @@ export const dbZoneRecords = {
 
     const stmt = db.prepare(`UPDATE zone_records SET ${fields.join(', ')} WHERE id = ?`);
     stmt.run(...values);
+
+    // Track change for IXFR (only if not just disabling)
+    if (updates.enabled === undefined || updates.enabled) {
+      // Increment serial first to get the new serial for change tracking
+      const newSerial = dbZones.incrementSerial(existing.zone_id);
+      const newName = updates.name !== undefined ? updates.name.toLowerCase() : existing.name;
+      const newType = updates.type !== undefined ? updates.type.toUpperCase() : existing.type;
+      const newTtl = updates.ttl !== undefined ? updates.ttl : existing.ttl;
+      const newData = updates.data !== undefined ? updates.data : existing.data;
+      const newPriority = updates.priority !== undefined ? updates.priority : existing.priority;
+      dbZoneChanges.recordModify(existing.zone_id, newSerial, id, newName, newType, newTtl, newData, newPriority);
+    }
   },
 
   delete(id: number) {
+    const existing = this.getById(id);
+    if (!existing) return;
+
+    // Increment serial first to get the new serial for change tracking
+    const newSerial = dbZones.incrementSerial(existing.zone_id);
+
     const stmt = db.prepare('DELETE FROM zone_records WHERE id = ?');
     stmt.run(id);
+
+    // Track change for IXFR with the new serial
+    dbZoneChanges.recordDelete(existing.zone_id, newSerial, id, existing.name, existing.type, existing.ttl, existing.data, existing.priority);
   },
 
   deleteByZone(zoneId: number) {

@@ -1350,13 +1350,12 @@ app.get('/api/ddns/update', async (c) => {
     const existing = dbZoneRecords.getByZone(zone.id).find((r) => r.name === recordName && r.type === 'A');
 
     if (existing) {
+      // update() already increments serial
       dbZoneRecords.update(existing.id, { data: ip, ttl: 300 });
     } else {
+      // create() already increments serial
       dbZoneRecords.create(zone.id, recordName, 'A', 300, ip);
     }
-
-    // Update SOA serial
-    dbZones.update(zone.id, { soa_serial: zone.soa_serial + 1 });
   }
 
   // Update or create AAAA record (if we have an IPv6 address)
@@ -1369,13 +1368,12 @@ app.get('/api/ddns/update', async (c) => {
     const existing = dbZoneRecords.getByZone(zone.id).find((r) => r.name === recordName && r.type === 'AAAA');
 
     if (existing) {
+      // update() already increments serial
       dbZoneRecords.update(existing.id, { data: finalIpv6, ttl: 300 });
     } else {
+      // create() already increments serial
       dbZoneRecords.create(zone.id, recordName, 'AAAA', 300, finalIpv6);
     }
-
-    // Update SOA serial
-    dbZones.update(zone.id, { soa_serial: zone.soa_serial + 1 });
   }
 
   if (!ip && !finalIpv6) {
@@ -2247,8 +2245,8 @@ app.post('/api/zones/:id/records', requireAuth, async (c) => {
       return c.json({ error: 'name, type, ttl, and data are required' }, 400);
     }
 
+    // create() already increments serial
     const recordId = dbZoneRecords.create(zoneId, name, type, ttl, data, priority);
-    dbZones.incrementSerial(zoneId);
     const record = dbZoneRecords.getById(recordId);
     return c.json(record, 201);
   } catch (error) {
@@ -2267,8 +2265,8 @@ app.put('/api/zones/records/:id', requireAuth, async (c) => {
     if (!record) {
       return c.json({ error: 'Record not found' }, 404);
     }
+    // update() already increments serial if needed
     dbZoneRecords.update(id, updates);
-    dbZones.incrementSerial(record.zone_id);
     const updatedRecord = dbZoneRecords.getById(id);
     return c.json(updatedRecord);
   } catch (error) {
@@ -2285,8 +2283,8 @@ app.delete('/api/zones/records/:id', requireAuth, (c) => {
   if (!record) {
     return c.json({ error: 'Record not found' }, 404);
   }
+  // delete() already increments serial
   dbZoneRecords.delete(id);
-  dbZones.incrementSerial(record.zone_id);
   return c.json({ success: true });
 });
 
