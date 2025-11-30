@@ -15,6 +15,7 @@ import { Route as UiComponentsRouteImport } from './routes/ui-components'
 import { Route as ToolsRouteImport } from './routes/tools'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as ScheduledTasksRouteImport } from './routes/scheduled-tasks'
 import { Route as RegexFiltersRouteImport } from './routes/regex-filters'
 import { Route as QueryPatternsRouteImport } from './routes/query-patterns'
 import { Route as QueriesRouteImport } from './routes/queries'
@@ -64,6 +65,11 @@ const SetupRoute = SetupRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ScheduledTasksRoute = ScheduledTasksRouteImport.update({
+  id: '/scheduled-tasks',
+  path: '/scheduled-tasks',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RegexFiltersRoute = RegexFiltersRouteImport.update({
@@ -187,6 +193,7 @@ export interface FileRoutesByFullPath {
   '/queries': typeof QueriesRoute
   '/query-patterns': typeof QueryPatternsRoute
   '/regex-filters': typeof RegexFiltersRoute
+  '/scheduled-tasks': typeof ScheduledTasksRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
@@ -215,6 +222,7 @@ export interface FileRoutesByTo {
   '/queries': typeof QueriesRoute
   '/query-patterns': typeof QueryPatternsRoute
   '/regex-filters': typeof RegexFiltersRoute
+  '/scheduled-tasks': typeof ScheduledTasksRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
@@ -244,6 +252,7 @@ export interface FileRoutesById {
   '/queries': typeof QueriesRoute
   '/query-patterns': typeof QueryPatternsRoute
   '/regex-filters': typeof RegexFiltersRoute
+  '/scheduled-tasks': typeof ScheduledTasksRoute
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
@@ -274,6 +283,7 @@ export interface FileRouteTypes {
     | '/queries'
     | '/query-patterns'
     | '/regex-filters'
+    | '/scheduled-tasks'
     | '/settings'
     | '/setup'
     | '/tools'
@@ -302,6 +312,7 @@ export interface FileRouteTypes {
     | '/queries'
     | '/query-patterns'
     | '/regex-filters'
+    | '/scheduled-tasks'
     | '/settings'
     | '/setup'
     | '/tools'
@@ -330,6 +341,7 @@ export interface FileRouteTypes {
     | '/queries'
     | '/query-patterns'
     | '/regex-filters'
+    | '/scheduled-tasks'
     | '/settings'
     | '/setup'
     | '/tools'
@@ -359,6 +371,7 @@ export interface RootRouteChildren {
   QueriesRoute: typeof QueriesRoute
   QueryPatternsRoute: typeof QueryPatternsRoute
   RegexFiltersRoute: typeof RegexFiltersRoute
+  ScheduledTasksRoute: typeof ScheduledTasksRoute
   SettingsRoute: typeof SettingsRoute
   SetupRoute: typeof SetupRoute
   ToolsRoute: typeof ToolsRoute
@@ -409,6 +422,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/scheduled-tasks': {
+      id: '/scheduled-tasks'
+      path: '/scheduled-tasks'
+      fullPath: '/scheduled-tasks'
+      preLoaderRoute: typeof ScheduledTasksRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/regex-filters': {
@@ -585,6 +605,7 @@ const rootRouteChildren: RootRouteChildren = {
   QueriesRoute: QueriesRoute,
   QueryPatternsRoute: QueryPatternsRoute,
   RegexFiltersRoute: RegexFiltersRoute,
+  ScheduledTasksRoute: ScheduledTasksRoute,
   SettingsRoute: SettingsRoute,
   SetupRoute: SetupRoute,
   ToolsRoute: ToolsRoute,

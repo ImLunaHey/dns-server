@@ -29,6 +29,7 @@ const navigation = [
   { name: "Zones", href: "/zones", icon: "🌍" },
   { name: "DDNS", href: "/ddns", icon: "🔄" },
   { name: "Tools", href: "/tools", icon: "🔧" },
+  { name: "Scheduled Tasks", href: "/scheduled-tasks", icon: "⏰" },
   { name: "Settings", href: "/settings", icon: "⚙️" },
   { name: "Block Page", href: "/block-page-settings", icon: "🚫" },
   { name: "API Keys", href: "/api-keys", icon: "🔑" },

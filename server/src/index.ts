@@ -1992,6 +1992,69 @@ app.delete('/api/scheduled-tasks/:id', requireAuth, (c) => {
   return c.json({ success: true });
 });
 
+app.post('/api/scheduled-tasks/:id/run', requireAuth, async (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  const task = dbScheduledTasks.getAll().find((t) => t.id === id);
+  
+  if (!task) {
+    return c.json({ error: 'Task not found' }, 404);
+  }
+
+  try {
+    if (task.taskType === 'blocklist-update') {
+      logger.info('Manually running blocklist update task...');
+      const updateId = dbBlocklistUpdates.startUpdate();
+      const adlists = dbAdlists.getAll().filter((a) => a.enabled === 1);
+      const urls = adlists.map((a) => a.url);
+
+      // Run in background but don't wait for completion
+      dnsServer
+        .reloadBlocklist()
+        .then(() => {
+          const blocklistSize = dnsServer.getBlocklistSize();
+          dbBlocklistUpdates.completeUpdate(updateId, blocklistSize);
+          logger.info('Manual blocklist update completed', { blocklistSize });
+        })
+        .catch((error) => {
+          logger.error('Manual blocklist update failed', {
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+          dbBlocklistUpdates.failUpdate(updateId, error instanceof Error ? error.message : 'Unknown error');
+        });
+
+      // Mark task as run (update lastRun and nextRun)
+      dbScheduledTasks.markRun(id);
+      
+      return c.json({ success: true, message: 'Task started', updateId });
+    }
+
+    return c.json({ error: 'Unknown task type' }, 400);
+  } catch (error) {
+    logger.error('Error running scheduled task', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    return c.json({ error: error instanceof Error ? error.message : 'Failed to run task' }, 500);
+  }
+});
+
+app.get('/api/scheduled-tasks/:id/logs', requireAuth, (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  const task = dbScheduledTasks.getAll().find((t) => t.id === id);
+  
+  if (!task) {
+    return c.json({ error: 'Task not found' }, 404);
+  }
+
+  // For blocklist-update tasks, return blocklist update history
+  if (task.taskType === 'blocklist-update') {
+    const limit = Number(c.req.query('limit')) || 20;
+    const updates = dbBlocklistUpdates.getAll(limit);
+    return c.json(updates);
+  }
+
+  return c.json([]);
+});
+
 // Long-term data
 app.get('/api/long-term', requireAuth, (c) => {
   const days = Number(c.req.query('days')) || 30;
@@ -2683,6 +2746,14 @@ async function main() {
 
   // Start DNS server
   await dnsServer.start();
+
+  // Create default scheduled task if none exists
+  const existingTasks = dbScheduledTasks.getAll();
+  const hasBlocklistUpdateTask = existingTasks.some((task) => task.taskType === 'blocklist-update');
+  if (!hasBlocklistUpdateTask) {
+    logger.info('Creating default scheduled blocklist update task (daily)');
+    dbScheduledTasks.create('blocklist-update', 'daily');
+  }
 
   // Start scheduled tasks runner
   setInterval(() => {

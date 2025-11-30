@@ -1087,4 +1087,99 @@ export const api = {
     if (!response.ok) throw new Error("Failed to fetch upstream hourly statistics");
     return response.json();
   },
+
+  // Scheduled Tasks
+  async getScheduledTasks(): Promise<
+    Array<{
+      id: number;
+      taskType: string;
+      schedule: string;
+      enabled: boolean;
+      lastRun: number | null;
+      nextRun: number | null;
+      createdAt: number;
+      updatedAt: number;
+    }>
+  > {
+    const response = await fetch(`${API_URL}/api/scheduled-tasks`, {
+      credentials: "include",
+    });
+    if (!response.ok) throw new Error("Failed to fetch scheduled tasks");
+    return response.json();
+  },
+
+  async createScheduledTask(data: { taskType: string; schedule: string }): Promise<void> {
+    const response = await fetch(`${API_URL}/api/scheduled-tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to create scheduled task");
+    }
+    return response.json();
+  },
+
+  async updateScheduledTask(
+    id: number,
+    data: { schedule?: string; enabled?: boolean }
+  ): Promise<void> {
+    const response = await fetch(`${API_URL}/api/scheduled-tasks/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to update scheduled task");
+    }
+    return response.json();
+  },
+
+  async deleteScheduledTask(id: number): Promise<void> {
+    const response = await fetch(`${API_URL}/api/scheduled-tasks/${id}`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to delete scheduled task");
+    }
+    return response.json();
+  },
+
+  async runScheduledTask(id: number): Promise<{ success: boolean; message: string; updateId?: number }> {
+    const response = await fetch(`${API_URL}/api/scheduled-tasks/${id}/run`, {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to run scheduled task");
+    }
+    return response.json();
+  },
+
+  async getScheduledTaskLogs(id: number, limit: number = 20): Promise<
+    Array<{
+      id: number;
+      startedAt: number;
+      completedAt: number | null;
+      status: "running" | "completed" | "failed";
+      domainsAdded: number;
+      error: string | null;
+    }>
+  > {
+    const response = await fetch(`${API_URL}/api/scheduled-tasks/${id}/logs?limit=${limit}`, {
+      credentials: "include",
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to fetch task logs");
+    }
+    return response.json();
+  },
 };
