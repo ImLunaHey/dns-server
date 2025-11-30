@@ -1182,4 +1182,36 @@ export const api = {
     }
     return response.json();
   },
+
+  async getClientUpstreamDNS(clientIp: string): Promise<{ upstreamDNS: string | null }> {
+    const response = await fetch(`${API_URL}/api/clients/${clientIp}/upstream-dns`, {
+      credentials: "include",
+    });
+    if (!response.ok) throw new Error("Failed to fetch client upstream DNS");
+    return response.json();
+  },
+
+  async setClientUpstreamDNS(clientIp: string, upstreamDNS: string): Promise<void> {
+    const response = await fetch(`${API_URL}/api/clients/${clientIp}/upstream-dns`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ upstreamDNS }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to set client upstream DNS");
+    }
+  },
+
+  async deleteClientUpstreamDNS(clientIp: string): Promise<void> {
+    const response = await fetch(`${API_URL}/api/clients/${clientIp}/upstream-dns`, {
+      method: "DELETE",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || "Failed to delete client upstream DNS");
+    }
+  },
 };

@@ -35,6 +35,7 @@ import { Route as ApiKeysRouteImport } from './routes/api-keys'
 import { Route as AllowlistRouteImport } from './routes/allowlist'
 import { Route as AdlistsRouteImport } from './routes/adlists'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ClientsIndexRouteImport } from './routes/clients.index'
 import { Route as ClientsClientIpStatsRouteImport } from './routes/clients.$clientIp.stats'
 
 const ZonesRoute = ZonesRouteImport.update({
@@ -167,6 +168,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ClientsIndexRoute = ClientsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ClientsRoute,
+} as any)
 const ClientsClientIpStatsRoute = ClientsClientIpStatsRouteImport.update({
   id: '/$clientIp/stats',
   path: '/$clientIp/stats',
@@ -200,6 +206,7 @@ export interface FileRoutesByFullPath {
   '/ui-components': typeof UiComponentsRoute
   '/upstream-stats': typeof UpstreamStatsRoute
   '/zones': typeof ZonesRoute
+  '/clients/': typeof ClientsIndexRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
 }
 export interface FileRoutesByTo {
@@ -209,7 +216,6 @@ export interface FileRoutesByTo {
   '/api-keys': typeof ApiKeysRoute
   '/block-page-settings': typeof BlockPageSettingsRoute
   '/cache-stats': typeof CacheStatsRoute
-  '/clients': typeof ClientsRouteWithChildren
   '/conditional-forwarding': typeof ConditionalForwardingRoute
   '/ddns': typeof DdnsRoute
   '/disable': typeof DisableRoute
@@ -229,6 +235,7 @@ export interface FileRoutesByTo {
   '/ui-components': typeof UiComponentsRoute
   '/upstream-stats': typeof UpstreamStatsRoute
   '/zones': typeof ZonesRoute
+  '/clients': typeof ClientsIndexRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
 }
 export interface FileRoutesById {
@@ -259,6 +266,7 @@ export interface FileRoutesById {
   '/ui-components': typeof UiComponentsRoute
   '/upstream-stats': typeof UpstreamStatsRoute
   '/zones': typeof ZonesRoute
+  '/clients/': typeof ClientsIndexRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
 }
 export interface FileRouteTypes {
@@ -290,6 +298,7 @@ export interface FileRouteTypes {
     | '/ui-components'
     | '/upstream-stats'
     | '/zones'
+    | '/clients/'
     | '/clients/$clientIp/stats'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -299,7 +308,6 @@ export interface FileRouteTypes {
     | '/api-keys'
     | '/block-page-settings'
     | '/cache-stats'
-    | '/clients'
     | '/conditional-forwarding'
     | '/ddns'
     | '/disable'
@@ -319,6 +327,7 @@ export interface FileRouteTypes {
     | '/ui-components'
     | '/upstream-stats'
     | '/zones'
+    | '/clients'
     | '/clients/$clientIp/stats'
   id:
     | '__root__'
@@ -348,6 +357,7 @@ export interface FileRouteTypes {
     | '/ui-components'
     | '/upstream-stats'
     | '/zones'
+    | '/clients/'
     | '/clients/$clientIp/stats'
   fileRoutesById: FileRoutesById
 }
@@ -564,6 +574,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/clients/': {
+      id: '/clients/'
+      path: '/'
+      fullPath: '/clients/'
+      preLoaderRoute: typeof ClientsIndexRouteImport
+      parentRoute: typeof ClientsRoute
+    }
     '/clients/$clientIp/stats': {
       id: '/clients/$clientIp/stats'
       path: '/$clientIp/stats'
@@ -575,10 +592,12 @@ declare module '@tanstack/react-router' {
 }
 
 interface ClientsRouteChildren {
+  ClientsIndexRoute: typeof ClientsIndexRoute
   ClientsClientIpStatsRoute: typeof ClientsClientIpStatsRoute
 }
 
 const ClientsRouteChildren: ClientsRouteChildren = {
+  ClientsIndexRoute: ClientsIndexRoute,
   ClientsClientIpStatsRoute: ClientsClientIpStatsRoute,
 }
 

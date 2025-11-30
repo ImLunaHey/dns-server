@@ -11,6 +11,7 @@ import { useSession } from "../lib/auth";
 import { Loading } from "../components/Loading";
 import { ErrorPage } from "../components/ErrorPage";
 import { ToastProvider } from "../contexts/ToastContext";
+import { ModalProvider } from "../contexts/ModalContext";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -52,7 +53,9 @@ function RootComponent() {
     return (
       <QueryClientProvider client={queryClient}>
         <ToastProvider>
-          <Loading fullScreen />
+          <ModalProvider>
+            <Loading fullScreen />
+          </ModalProvider>
         </ToastProvider>
       </QueryClientProvider>
     );
@@ -63,8 +66,10 @@ function RootComponent() {
     return (
       <QueryClientProvider client={queryClient}>
         <ToastProvider>
-          <Outlet />
-          <ReactQueryDevtools initialIsOpen={false} />
+          <ModalProvider>
+            <Outlet />
+            <ReactQueryDevtools initialIsOpen={false} />
+          </ModalProvider>
         </ToastProvider>
       </QueryClientProvider>
     );
@@ -76,7 +81,9 @@ function RootComponent() {
     return (
       <QueryClientProvider client={queryClient}>
         <ToastProvider>
-          <Loading fullScreen />
+          <ModalProvider>
+            <Loading fullScreen />
+          </ModalProvider>
         </ToastProvider>
       </QueryClientProvider>
     );
@@ -86,17 +93,19 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <div className="min-h-screen bg-gray-50 dark:bg-black flex flex-col md:flex-row">
-          {isAuthenticated && <NavigationSidebar />}
-          <div
-            className={`flex-1 w-full ${
-              isAuthenticated ? "md:ml-64" : ""
-            } min-w-0`}
-          >
-            <Outlet />
+        <ModalProvider>
+          <div className="min-h-screen bg-gray-50 dark:bg-black flex flex-col md:flex-row">
+            {isAuthenticated && <NavigationSidebar />}
+            <div
+              className={`flex-1 w-full ${
+                isAuthenticated ? "md:ml-64" : ""
+              } min-w-0`}
+            >
+              <Outlet />
+            </div>
           </div>
-        </div>
-        <ReactQueryDevtools initialIsOpen={false} />
+          <ReactQueryDevtools initialIsOpen={false} />
+        </ModalProvider>
       </ToastProvider>
     </QueryClientProvider>
   );

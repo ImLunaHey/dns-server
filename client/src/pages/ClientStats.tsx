@@ -1,15 +1,13 @@
-import { useParams, useNavigate } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { Panel } from "../components/Panel";
 import { PageHeader } from "../components/PageHeader";
 import { Loading } from "../components/Loading";
 import { DataTable } from "../components/Table";
-import { Button } from "../components/Button";
 
 export function ClientStats() {
   const { clientIp } = useParams({ from: "/clients/$clientIp/stats" });
-  const navigate = useNavigate();
 
   const { data: stats, isLoading, error } = useQuery({
     queryKey: ["clientStats", clientIp],
@@ -30,9 +28,6 @@ export function ClientStats() {
             <p className="text-red-400">
               {error instanceof Error ? error.message : "Failed to load client statistics"}
             </p>
-            <Button onClick={() => navigate({ to: "/clients" })} className="mt-4">
-              Back to Clients
-            </Button>
           </Panel>
         </main>
       </>
@@ -44,11 +39,7 @@ export function ClientStats() {
       <PageHeader
         title={`Client Statistics: ${clientIp}`}
         description={`Statistics for ${clientIp}`}
-      >
-        <Button onClick={() => navigate({ to: "/clients" })} variant="outline">
-          Back to Clients
-        </Button>
-      </PageHeader>
+      />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="space-y-6">

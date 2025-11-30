@@ -14,6 +14,12 @@ import {
   useAddClientBlocklist,
   useRemoveClientBlocklist,
 } from "../hooks/useClientBlocking";
+import {
+  useClientUpstreamDNS,
+  useSetClientUpstreamDNS,
+  useDeleteClientUpstreamDNS,
+} from "../hooks/useClientUpstreamDNS";
+import { useModalManager } from "../contexts/ModalContext";
 import { cn } from "../lib/cn";
 import { useNavigate } from "@tanstack/react-router";
 import { Panel } from "../components/Panel";
@@ -33,7 +39,7 @@ export function Clients() {
   const deleteClientName = useDeleteClientName();
   const [editingClient, setEditingClient] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
-  const [selectedClient, setSelectedClient] = useState<string | null>(null);
+  const modalManager = useModalManager();
 
   const loading = statsLoading || queriesLoading || namesLoading;
 
@@ -190,7 +196,10 @@ export function Clients() {
                   title: "View Stats",
                   color: "green" as const,
                   onClick: () => {
-                    navigate({ to: `/clients/${clientIp}/stats` });
+                    navigate({
+                      to: "/clients/$clientIp/stats",
+                      params: { clientIp },
+                    });
                   },
                 },
                 {
@@ -201,15 +210,28 @@ export function Clients() {
                   },
                 },
                 {
-                  title:
-                    selectedClient === clientIp
-                      ? "Hide Rules"
-                      : "Blocking Rules",
+                  title: "Blocking Rules",
                   color: "purple" as const,
-                  onClick: () =>
-                    setSelectedClient(
-                      selectedClient === clientIp ? null : clientIp
-                    ),
+                  onClick: () => {
+                    const modalId = `blocking-rules-${clientIp}`;
+                    modalManager.add(
+                      modalId,
+                      () => <ClientBlockingRulesModal clientIp={clientIp} />,
+                      { size: "lg" }
+                    );
+                  },
+                },
+                {
+                  title: "Upstream DNS",
+                  color: "yellow" as const,
+                  onClick: () => {
+                    const modalId = `upstream-dns-${clientIp}`;
+                    modalManager.add(
+                      modalId,
+                      () => <ClientUpstreamDNSModal clientIp={clientIp} />,
+                      { size: "md" }
+                    );
+                  },
                 },
               ];
             }}
@@ -217,15 +239,12 @@ export function Clients() {
             getRowKey={(row) => row.clientIp}
           />
         </Panel>
-
-        {/* Blocking Rules for Selected Client */}
-        {selectedClient && <ClientBlockingRules clientIp={selectedClient} />}
       </main>
     </>
   );
 }
 
-function ClientBlockingRules({ clientIp }: { clientIp: string }) {
+function ClientBlockingRulesModal({ clientIp }: { clientIp: string }) {
   const { data, isLoading } = useClientBlocking(clientIp);
   const updateBlocking = useUpdateClientBlocking();
   const addAllowlist = useAddClientAllowlist();
@@ -235,14 +254,22 @@ function ClientBlockingRules({ clientIp }: { clientIp: string }) {
 
   if (isLoading || !data) {
     return (
-      <Panel className="mt-6">
+      <div className="py-8">
         <Loading text="Loading blocking rules..." />
-      </Panel>
+      </div>
     );
   }
 
   return (
-    <div className="mt-6">
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+          Blocking Rules for {clientIp}
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Configure blocking rules for this specific client
+        </p>
+      </div>
       <BlockingRules
         enabled={data.enabled}
         onToggleEnabled={(enabled) =>
@@ -265,8 +292,253 @@ function ClientBlockingRules({ clientIp }: { clientIp: string }) {
           addBlocklist.isPending ||
           removeBlocklist.isPending
         }
-        title={`Blocking Rules for ${clientIp}`}
       />
+    </div>
+  );
+}
+
+function ClientUpstreamDNSModal({ clientIp }: { clientIp: string }) {
+  const { data, isLoading } = useClientUpstreamDNS(clientIp);
+  const deleteUpstreamDNS = useDeleteClientUpstreamDNS();
+  const modalManager = useModalManager();
+
+  if (isLoading || !data) {
+    return (
+      <div className="py-8">
+        <Loading text="Loading upstream DNS..." />
+      </div>
+    );
+  }
+
+  const currentUpstreamDNS = data.upstreamDNS;
+
+  const handleEdit = () => {
+    const modalId = `edit-upstream-dns-${clientIp}`;
+    modalManager.add(
+      modalId,
+      () => (
+        <EditUpstreamDNSModal
+          clientIp={clientIp}
+          currentValue={currentUpstreamDNS || ""}
+        />
+      ),
+      { size: "md" }
+    );
+  };
+
+  const handleDelete = () => {
+    const modalId = `delete-upstream-dns-${clientIp}`;
+    modalManager.add(
+      modalId,
+      () => <DeleteUpstreamDNSModal clientIp={clientIp} />,
+      { size: "sm" }
+    );
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+          Upstream DNS for {clientIp}
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Configure a custom upstream DNS server for this client. This takes
+          priority over global upstream DNS and conditional forwarding.
+        </p>
+      </div>
+      {currentUpstreamDNS ? (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Current Upstream DNS:
+            </label>
+            <div className="px-3 py-2 bg-gray-100 dark:bg-gray-800 rounded font-mono text-sm text-gray-900 dark:text-white">
+              {currentUpstreamDNS}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleEdit}
+              className={cn(
+                "px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white"
+              )}
+            >
+              Edit
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={deleteUpstreamDNS.isPending}
+              className={cn(
+                "px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-white",
+                "disabled:opacity-50 disabled:cursor-not-allowed"
+              )}
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            No custom upstream DNS configured. This client will use the global
+            upstream DNS or conditional forwarding rules.
+          </p>
+          <button
+            onClick={handleEdit}
+            className={cn(
+              "px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white"
+            )}
+          >
+            Set Upstream DNS
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EditUpstreamDNSModal({
+  clientIp,
+  currentValue,
+}: {
+  clientIp: string;
+  currentValue: string;
+}) {
+  const setUpstreamDNS = useSetClientUpstreamDNS();
+  const modalManager = useModalManager();
+  const [upstreamDNSValue, setUpstreamDNSValue] = useState(currentValue);
+
+  const handleSave = () => {
+    if (upstreamDNSValue.trim()) {
+      setUpstreamDNS.mutate(
+        { clientIp, upstreamDNS: upstreamDNSValue.trim() },
+        {
+          onSuccess: () => {
+            modalManager.remove(`edit-upstream-dns-${clientIp}`);
+          },
+        }
+      );
+    }
+  };
+
+  const handleCancel = () => {
+    modalManager.remove(`edit-upstream-dns-${clientIp}`);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+          Edit Upstream DNS
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Configure a custom upstream DNS server for {clientIp}
+        </p>
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          Upstream DNS Server(s)
+        </label>
+        <input
+          type="text"
+          value={upstreamDNSValue}
+          onChange={(e) => setUpstreamDNSValue(e.target.value)}
+          placeholder="1.1.1.1 or 1.1.1.1,8.8.8.8,9.9.9.9 (comma-separated for failover)"
+          className={cn(
+            "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
+            "focus:outline-none focus:ring-2 focus:ring-blue-500"
+          )}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleSave();
+            if (e.key === "Escape") handleCancel();
+          }}
+          autoFocus
+        />
+        <p className="text-xs text-gray-400 mt-1">
+          IP address(es) of upstream DNS server(s). Multiple servers can be
+          comma-separated for automatic failover. Supports IP addresses, DoH
+          (https://), and DoT (tls://) URLs.
+        </p>
+      </div>
+      <div className="flex gap-2 justify-end">
+        <button
+          onClick={handleCancel}
+          disabled={setUpstreamDNS.isPending}
+          className={cn(
+            "px-4 py-2 bg-gray-600 hover:bg-gray-700 rounded text-white",
+            "disabled:opacity-50 disabled:cursor-not-allowed"
+          )}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={setUpstreamDNS.isPending || !upstreamDNSValue.trim()}
+          className={cn(
+            "px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white",
+            "disabled:opacity-50 disabled:cursor-not-allowed"
+          )}
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DeleteUpstreamDNSModal({ clientIp }: { clientIp: string }) {
+  const deleteUpstreamDNS = useDeleteClientUpstreamDNS();
+  const modalManager = useModalManager();
+
+  const handleDelete = () => {
+    deleteUpstreamDNS.mutate(
+      { clientIp },
+      {
+        onSuccess: () => {
+          modalManager.remove(`delete-upstream-dns-${clientIp}`);
+        },
+      }
+    );
+  };
+
+  const handleCancel = () => {
+    modalManager.remove(`delete-upstream-dns-${clientIp}`);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+          Remove Upstream DNS
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Are you sure you want to remove the custom upstream DNS configuration
+          for {clientIp}? This client will use the global upstream DNS or
+          conditional forwarding rules.
+        </p>
+      </div>
+      <div className="flex gap-2 justify-end">
+        <button
+          onClick={handleCancel}
+          disabled={deleteUpstreamDNS.isPending}
+          className={cn(
+            "px-4 py-2 bg-gray-600 hover:bg-gray-700 rounded text-white",
+            "disabled:opacity-50 disabled:cursor-not-allowed"
+          )}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleDelete}
+          disabled={deleteUpstreamDNS.isPending}
+          className={cn(
+            "px-4 py-2 bg-red-600 hover:bg-red-700 rounded text-white",
+            "disabled:opacity-50 disabled:cursor-not-allowed"
+          )}
+        >
+          Remove
+        </button>
+      </div>
     </div>
   );
 }
