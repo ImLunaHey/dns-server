@@ -283,7 +283,7 @@ export function Zones() {
                           placeholder="3600"
                         />
                       </FormField>
-                      {(newRecordType === "MX" || newRecordType === "SRV") && (
+                      {newRecordType === "MX" && (
                         <FormField label="Priority">
                           <Input
                             type="number"
@@ -295,7 +295,7 @@ export function Zones() {
                       )}
                       <FormField 
                         label="Data" 
-                        className={newRecordType === "MX" || newRecordType === "SRV" ? "md:col-span-2" : ""}
+                        className={newRecordType === "MX" ? "md:col-span-2" : ""}
                       >
                         <Input
                           type="text"
@@ -341,7 +341,7 @@ export function Zones() {
                       { header: "Type", accessor: "type" },
                       { header: "TTL", accessor: "ttl" },
                       { header: "Data", accessor: "data" },
-                      ...(records.some(r => r.priority !== null) ? [{ header: "Priority", accessor: "priority" }] : []),
+                      ...(records.some(r => r.priority !== null) ? [{ header: "Priority", accessor: "priority" as const }] : []),
                     ]}
                     actions={(row) => [
                       {
