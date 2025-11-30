@@ -80,6 +80,11 @@ export class DNSServer {
   private blockingEnabled: boolean = true;
   private blockingDisabledUntil: number | null = null;
   private upstreamDNS: string;
+  private upstreamDNSList: string[] = [];
+  private upstreamHealth: Map<string, { failures: number; lastFailure: number; disabledUntil: number }> = new Map();
+  private upstreamMaxFailures: number = 3;
+  private upstreamFailureWindow: number = 60000; // 1 minute
+  private upstreamDisableDuration: number = 300000; // 5 minutes
   private port: number;
   private dotPort: number;
   private doqPort: number;
@@ -108,6 +113,15 @@ export class DNSServer {
     this.dotPort = parseInt(dbSettings.get('dotPort', '853'), 10);
     this.doqPort = parseInt(dbSettings.get('doqPort', '853'), 10);
     this.upstreamDNS = dbSettings.get('upstreamDNS', '1.1.1.1');
+    // Parse multiple upstream DNS servers (comma-separated)
+    const upstreamDNSStr = dbSettings.get('upstreamDNS', '1.1.1.1');
+    this.upstreamDNSList = upstreamDNSStr
+      .split(',')
+      .map((dns) => dns.trim())
+      .filter((dns) => dns.length > 0);
+    if (this.upstreamDNSList.length === 0) {
+      this.upstreamDNSList = ['1.1.1.1'];
+    }
     this.port = parseInt(dbSettings.get('dnsPort', '53'), 10);
     this.rateLimitEnabled = dbSettings.get('rateLimitEnabled', 'false') === 'true';
     this.rateLimitMaxQueries = parseInt(dbSettings.get('rateLimitMaxQueries', '1000'), 10);
@@ -1263,56 +1277,146 @@ export class DNSServer {
     return bytes;
   }
 
+  /**
+   * Get list of upstream DNS servers to try, filtering out disabled ones
+   */
+  private getAvailableUpstreamServers(): string[] {
+    const now = Date.now();
+    return this.upstreamDNSList.filter((dns) => {
+      const health = this.upstreamHealth.get(dns);
+      if (!health) return true;
+      // Check if server is disabled
+      if (now < health.disabledUntil) return false;
+      // Reset failures if enough time has passed
+      if (now - health.lastFailure > this.upstreamFailureWindow) {
+        this.upstreamHealth.delete(dns);
+        return true;
+      }
+      return true;
+    });
+  }
+
+  /**
+   * Mark an upstream DNS server as failed
+   */
+  private markUpstreamFailure(dns: string) {
+    const health = this.upstreamHealth.get(dns) || { failures: 0, lastFailure: 0, disabledUntil: 0 };
+    health.failures += 1;
+    health.lastFailure = Date.now();
+    if (health.failures >= this.upstreamMaxFailures) {
+      health.disabledUntil = Date.now() + this.upstreamDisableDuration;
+      logger.warn('Upstream DNS disabled due to failures', { dns, failures: health.failures });
+    }
+    this.upstreamHealth.set(dns, health);
+  }
+
+  /**
+   * Mark an upstream DNS server as successful (reset failure count)
+   */
+  private markUpstreamSuccess(dns: string) {
+    this.upstreamHealth.delete(dns);
+  }
+
   private async forwardQuery(msg: Buffer, domain: string, clientIp?: string, useTcp: boolean = false): Promise<Buffer> {
-    return new Promise(async (resolve, reject) => {
-      // Priority: client-specific DNS > conditional forwarding > default upstream
-      let targetDNS = this.upstreamDNS;
+    // Priority: client-specific DNS > conditional forwarding > default upstream
+    let targetDNSList: string[] = [];
 
-      if (clientIp) {
-        const clientDNS = dbClientUpstreamDNS.get(clientIp);
-        if (clientDNS) {
-          targetDNS = clientDNS;
-        }
+    if (clientIp) {
+      const clientDNS = dbClientUpstreamDNS.get(clientIp);
+      if (clientDNS) {
+        // Client-specific DNS can be comma-separated
+        targetDNSList = clientDNS
+          .split(',')
+          .map((dns) => dns.trim())
+          .filter((dns) => dns.length > 0);
       }
+    }
 
-      // Check conditional forwarding if no client-specific DNS
-      if (targetDNS === this.upstreamDNS) {
-        const conditionalDNS = dbConditionalForwarding.findUpstreamDNS(domain);
-        if (conditionalDNS) {
-          targetDNS = conditionalDNS;
-        }
+    // Check conditional forwarding if no client-specific DNS
+    if (targetDNSList.length === 0) {
+      const conditionalDNS = dbConditionalForwarding.findUpstreamDNS(domain);
+      if (conditionalDNS) {
+        // Conditional forwarding can be comma-separated
+        targetDNSList = conditionalDNS
+          .split(',')
+          .map((dns) => dns.trim())
+          .filter((dns) => dns.length > 0);
       }
+    }
 
-      // Check if targetDNS is a DoH URL (https://)
-      if (targetDNS.startsWith('https://')) {
+    // Use default upstream list if no specific DNS found
+    if (targetDNSList.length === 0) {
+      targetDNSList = this.getAvailableUpstreamServers();
+    }
+
+    // Try each upstream DNS server in order until one succeeds
+    const errors: Error[] = [];
+    for (const targetDNS of targetDNSList) {
+      try {
+        // Check if targetDNS is a DoH URL (https://)
+        if (targetDNS.startsWith('https://')) {
+          try {
+            const dohResponse = await this.forwardQueryDoH(msg, targetDNS);
+            this.markUpstreamSuccess(targetDNS);
+            return dohResponse;
+          } catch (error) {
+            errors.push(error instanceof Error ? error : new Error(String(error)));
+            this.markUpstreamFailure(targetDNS);
+            logger.debug('DoH query failed, trying next upstream', {
+              error: error instanceof Error ? error : new Error(String(error)),
+              targetDNS,
+            });
+            continue; // Try next upstream
+          }
+        }
+
+        // Check if targetDNS is a DoT URL (tls:// or dot://)
+        if (targetDNS.startsWith('tls://') || targetDNS.startsWith('dot://')) {
+          try {
+            const dotResponse = await this.forwardQueryDoT(msg, targetDNS);
+            this.markUpstreamSuccess(targetDNS);
+            return dotResponse;
+          } catch (error) {
+            errors.push(error instanceof Error ? error : new Error(String(error)));
+            this.markUpstreamFailure(targetDNS);
+            logger.debug('DoT query failed, trying next upstream', {
+              error: error instanceof Error ? error : new Error(String(error)),
+              targetDNS,
+            });
+            continue; // Try next upstream
+          }
+        }
+
+        // Try UDP/TCP
         try {
-          const dohResponse = await this.forwardQueryDoH(msg, targetDNS);
-          resolve(dohResponse);
-          return;
+          const response = await this.forwardQueryUDPTCP(msg, targetDNS, useTcp);
+          this.markUpstreamSuccess(targetDNS);
+          return response;
         } catch (error) {
-          logger.error('DoH query failed, falling back to UDP', {
+          errors.push(error instanceof Error ? error : new Error(String(error)));
+          this.markUpstreamFailure(targetDNS);
+          logger.debug('UDP/TCP query failed, trying next upstream', {
             error: error instanceof Error ? error : new Error(String(error)),
             targetDNS,
           });
-          // Fall through to UDP fallback
+          continue; // Try next upstream
         }
+      } catch (error) {
+        errors.push(error instanceof Error ? error : new Error(String(error)));
+        this.markUpstreamFailure(targetDNS);
+        continue;
       }
+    }
 
-      // Check if targetDNS is a DoT URL (tls:// or dot://)
-      if (targetDNS.startsWith('tls://') || targetDNS.startsWith('dot://')) {
-        try {
-          const dotResponse = await this.forwardQueryDoT(msg, targetDNS);
-          resolve(dotResponse);
-          return;
-        } catch (error) {
-          logger.error('DoT query failed, falling back to UDP', {
-            error: error instanceof Error ? error : new Error(String(error)),
-            targetDNS,
-          });
-          // Fall through to UDP fallback
-        }
-      }
+    // All upstreams failed
+    throw new Error(`All upstream DNS servers failed: ${errors.map((e) => e.message).join(', ')}`);
+  }
 
+  /**
+   * Forward query over UDP or TCP
+   */
+  private async forwardQueryUDPTCP(msg: Buffer, targetDNS: string, useTcp: boolean): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
       if (useTcp) {
         // Forward over TCP
         const isIPv6 = targetDNS.includes(':');
@@ -1357,7 +1461,7 @@ export class DNSServer {
           socket.write(tcpMsg);
         });
       } else {
-        // Forward over UDP (existing logic)
+        // Forward over UDP
         const isIPv6 = targetDNS.includes(':');
         const socketType = isIPv6 ? 'udp6' : 'udp4';
         const client = dgram.createSocket(socketType);
@@ -1896,11 +2000,33 @@ export class DNSServer {
 
   setUpstreamDNS(dns: string) {
     this.upstreamDNS = dns;
+    // Parse multiple upstream DNS servers (comma-separated)
+    this.upstreamDNSList = dns
+      .split(',')
+      .map((d) => d.trim())
+      .filter((d) => d.length > 0);
+    if (this.upstreamDNSList.length === 0) {
+      this.upstreamDNSList = ['1.1.1.1'];
+    }
     dbSettings.set('upstreamDNS', dns);
+    // Reset health tracking when upstream DNS changes
+    this.upstreamHealth.clear();
   }
 
   getUpstreamDNS(): string {
     return this.upstreamDNS;
+  }
+
+  getUpstreamDNSList(): string[] {
+    return [...this.upstreamDNSList];
+  }
+
+  getUpstreamHealth(): Record<string, { failures: number; lastFailure: number; disabledUntil: number }> {
+    const health: Record<string, { failures: number; lastFailure: number; disabledUntil: number }> = {};
+    this.upstreamHealth.forEach((value, key) => {
+      health[key] = { ...value };
+    });
+    return health;
   }
 
   getPort(): number {

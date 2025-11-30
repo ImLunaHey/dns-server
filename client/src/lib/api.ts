@@ -320,6 +320,8 @@ export const api = {
 
   async getSettings(): Promise<{
     upstreamDNS: IP;
+    upstreamDNSList?: string[];
+    upstreamHealth?: Record<string, { failures: number; lastFailure: number; disabledUntil: number }>;
     dnsPort: number;
     queryRetentionDays: number;
     privacyMode: boolean;

@@ -100,7 +100,7 @@ export function Settings() {
   } = useForm<SettingsFormData>({
     mode: "onChange", // Validate on change to show errors immediately
     defaultValues: {
-      upstreamDNS: settings?.upstreamDNS || "1.1.1.1",
+      upstreamDNS: settings?.upstreamDNS || settings?.upstreamDNSList?.join(",") || "1.1.1.1",
       queryRetentionDays: settings?.queryRetentionDays ?? 7,
       privacyMode: Boolean(settings?.privacyMode ?? false),
       rateLimitEnabled: Boolean(settings?.rateLimitEnabled ?? false),
@@ -123,7 +123,7 @@ export function Settings() {
   useEffect(() => {
     if (settings) {
       reset({
-        upstreamDNS: settings.upstreamDNS || "1.1.1.1",
+        upstreamDNS: settings.upstreamDNS || settings.upstreamDNSList?.join(",") || "1.1.1.1",
         queryRetentionDays: settings.queryRetentionDays ?? 7,
         privacyMode: Boolean(settings.privacyMode ?? false),
         rateLimitEnabled: Boolean(settings.rateLimitEnabled ?? false),
@@ -244,15 +244,15 @@ export function Settings() {
                           <button
                             type="button"
                             onClick={() =>
-                              setValue("upstreamDNS", provider.ipv4[0])
+                              setValue("upstreamDNS", provider.ipv4.join(","))
                             }
                             className={cn(
                               "w-full text-left px-2 py-1 text-xs rounded",
                               "bg-gray-600 hover:bg-gray-500 text-gray-200",
-                              upstreamDNS === provider.ipv4[0] &&
+                              (upstreamDNS === provider.ipv4[0] || upstreamDNS === provider.ipv4.join(",")) &&
                                 "bg-blue-600 hover:bg-blue-700 text-white"
                             )}
-                            title={`Primary: ${provider.ipv4[0]}, Secondary: ${provider.ipv4[1]}`}
+                            title={`Primary: ${provider.ipv4[0]}, Secondary: ${provider.ipv4[1]} (both will be set for failover)`}
                           >
                             IPv4: {provider.ipv4[0]}
                           </button>
@@ -260,15 +260,15 @@ export function Settings() {
                             <button
                               type="button"
                               onClick={() =>
-                                setValue("upstreamDNS", provider.ipv6![0])
+                                setValue("upstreamDNS", provider.ipv6!.join(","))
                               }
                               className={cn(
                                 "w-full text-left px-2 py-1 text-xs rounded",
                                 "bg-gray-600 hover:bg-gray-500 text-gray-200",
-                                upstreamDNS === provider.ipv6[0] &&
+                                (upstreamDNS === provider.ipv6[0] || upstreamDNS === provider.ipv6.join(",")) &&
                                   "bg-blue-600 hover:bg-blue-700 text-white"
                               )}
-                              title={`Primary: ${provider.ipv6[0]}, Secondary: ${provider.ipv6[1]}`}
+                              title={`Primary: ${provider.ipv6[0]}, Secondary: ${provider.ipv6[1]} (both will be set for failover)`}
                             >
                               IPv6: {provider.ipv6[0].substring(0, 20)}...
                             </button>
@@ -300,7 +300,7 @@ export function Settings() {
                           );
                         },
                       })}
-                      placeholder="1.1.1.1 or custom IP"
+                      placeholder="1.1.1.1 or 1.1.1.1,8.8.8.8,9.9.9.9 (comma-separated for failover)"
                       className={cn(
                         "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
                         "focus:outline-none focus:ring-2 focus:ring-blue-500",
@@ -308,8 +308,7 @@ export function Settings() {
                       )}
                     />
                     <p className="text-xs text-gray-400 mt-1">
-                      IP address of the upstream DNS server to forward queries
-                      to
+                      IP address(es) of upstream DNS server(s). Multiple servers can be comma-separated for automatic failover (e.g., 1.1.1.1,8.8.8.8). Supports IP addresses, DoH (https://), and DoT (tls://) URLs.
                     </p>
                   </FormField>
                 </div>

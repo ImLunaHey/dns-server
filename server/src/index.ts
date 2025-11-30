@@ -1300,6 +1300,8 @@ app.get('/api/settings', requireAuth, (c) => {
   const blockPageStatus = dnsServer.getBlockPageStatus();
   return c.json({
     upstreamDNS: dnsServer.getUpstreamDNS(),
+    upstreamDNSList: dnsServer.getUpstreamDNSList(),
+    upstreamHealth: dnsServer.getUpstreamHealth(),
     dnsPort: dnsServer.getPort(),
     queryRetentionDays: parseInt(dbSettings.get('queryRetentionDays', '7'), 10),
     privacyMode: dbSettings.get('privacyMode', 'false') === 'true',
