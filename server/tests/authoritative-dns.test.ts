@@ -1,10 +1,42 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import dgram from 'dgram';
+import { DNSServer } from '../src/dns-server';
+import { dbSettings } from '../src/db';
 
 const ZONE_DOMAIN = process.env.TEST_ZONE || 'test.local';
 const API_URL = process.env.API_URL || 'http://localhost:3001';
-const DNS_SERVER = process.env.DNS_SERVER || '127.0.0.1';
-const DNS_PORT = parseInt(process.env.DNS_PORT || '53', 10);
+let DNS_SERVER = '127.0.0.1';
+let DNS_PORT = 53;
+
+let dnsServer: DNSServer | null = null;
+
+beforeAll(async () => {
+  // Get an available port
+  const testSocket = dgram.createSocket('udp4');
+  DNS_PORT = await new Promise<number>((resolve, reject) => {
+    testSocket.bind(0, () => {
+      const port = (testSocket.address() as { port: number }).port;
+      testSocket.close(() => resolve(port));
+    });
+    testSocket.on('error', reject);
+  });
+
+  // Set the port in dbSettings before creating the server
+  dbSettings.set('dnsPort', String(DNS_PORT));
+
+  // Start DNS server
+  dnsServer = new DNSServer();
+  await dnsServer.start();
+
+  // Give the server a moment to fully start
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}, 30000);
+
+afterAll(() => {
+  if (dnsServer) {
+    dnsServer.stop();
+  }
+});
 
 function createDNSQuery(domain: string, type: string): Buffer {
   const typeMap: Record<string, number> = {
@@ -89,43 +121,18 @@ function queryDNS(domain: string, type: string): Promise<{ rcode: number; aa: bo
 }
 
 describe('Authoritative DNS', () => {
-  it.skipIf(process.env.SKIP_AUTHORITATIVE === 'true')('should respond to A record queries', async () => {
-    try {
-      const response = await queryDNS(`www.${ZONE_DOMAIN}`, 'A');
-      expect(response.response.length).toBeGreaterThan(0);
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('ECONNREFUSED')) {
-        console.warn('DNS server not available - skipping test');
-        return;
-      }
-      throw error;
-    }
+  it('should respond to A record queries', async () => {
+    const response = await queryDNS(`www.${ZONE_DOMAIN}`, 'A');
+    expect(response.response.length).toBeGreaterThan(0);
   }, 10000);
 
-  it.skipIf(process.env.SKIP_AUTHORITATIVE === 'true')('should respond to AAAA record queries', async () => {
-    try {
-      const response = await queryDNS(`www.${ZONE_DOMAIN}`, 'AAAA');
-      expect(response.response.length).toBeGreaterThan(0);
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('ECONNREFUSED')) {
-        console.warn('DNS server not available - skipping test');
-        return;
-      }
-      throw error;
-    }
+  it('should respond to AAAA record queries', async () => {
+    const response = await queryDNS(`www.${ZONE_DOMAIN}`, 'AAAA');
+    expect(response.response.length).toBeGreaterThan(0);
   }, 10000);
 
-  it.skipIf(process.env.SKIP_AUTHORITATIVE === 'true')('should return NXDOMAIN for non-existent records', async () => {
-    try {
-      const response = await queryDNS(`nonexistent.${ZONE_DOMAIN}`, 'A');
-      expect(response.rcode).toBe(3);
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('ECONNREFUSED')) {
-        console.warn('DNS server not available - skipping test');
-        return;
-      }
-      throw error;
-    }
+  it('should return NXDOMAIN for non-existent records', async () => {
+    const response = await queryDNS(`nonexistent.${ZONE_DOMAIN}`, 'A');
+    expect(response.rcode).toBe(3);
   }, 10000);
 });
-

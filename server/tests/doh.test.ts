@@ -1,8 +1,22 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { startTestServers, getTestServers } from './test-server-helper';
 
 const domain = process.env.TEST_DOMAIN || 'example.com';
 const type = process.env.TEST_TYPE || 'A';
-const API_URL = process.env.API_URL || 'http://localhost:3001';
+
+let API_URL = '';
+
+beforeAll(async () => {
+  const servers = await startTestServers();
+  API_URL = `http://localhost:${servers.httpPort}`;
+});
+
+afterAll(() => {
+  const servers = getTestServers();
+  if (servers) {
+    servers.stop();
+  }
+});
 
 function createDNSQuery(domain: string, type: string): Buffer {
   const typeMap: Record<string, number> = {

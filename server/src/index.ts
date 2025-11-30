@@ -1,6 +1,7 @@
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { pathToFileURL } from 'url';
 import { DNSServer } from './dns-server.js';
 import { logger } from './logger.js';
 import {
@@ -33,8 +34,8 @@ import db from './db.js';
 import { auth } from './auth.js';
 import { requireAuth } from './middleware.js';
 
-const app = new Hono();
-const dnsServer = new DNSServer();
+export const app = new Hono();
+export const dnsServer = new DNSServer();
 
 // Enable CORS for frontend
 app.use(
@@ -2471,9 +2472,15 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  logger.error('Fatal error in main', {
-    error: error instanceof Error ? error : new Error(String(error)),
+// Only run main() if this file is being executed directly (not imported)
+// Skip in test environment to avoid port conflicts
+// In ES modules, check if this is the main module
+const isMainModule = import.meta.url === pathToFileURL(process.argv[1] || '').href;
+if (isMainModule && process.env.NODE_ENV !== 'test' && !process.env.VITEST) {
+  main().catch((error) => {
+    logger.error('Fatal error in main', {
+      error: error instanceof Error ? error : new Error(String(error)),
+    });
+    process.exit(1);
   });
-  process.exit(1);
-});
+}

@@ -4,7 +4,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['src/**/*.test.ts', 'src/**/*.spec.ts', 'tests/**/*.test.ts', 'tests/**/*.spec.ts', 'tests/**/*.ts'],
+    include: ['src/**/*.test.ts', 'src/**/*.spec.ts', 'tests/**/*.test.ts', 'tests/**/*.spec.ts'],
+    exclude: ['tests/**/*.helper.ts', 'tests/**/*-helper.ts'],
     env: {
       NODE_ENV: 'test',
       VITEST: 'true',
