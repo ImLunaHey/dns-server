@@ -31,10 +31,11 @@ class Logger {
   private supportsColor: boolean;
 
   constructor() {
-    // Get log level from environment or default to 'info'
-    const envLevel = (process.env.LOG_LEVEL || 'info').toLowerCase() as LogLevel;
+    // Get log level from environment or default to 'debug' in development, 'info' in production
+    const defaultLevel = process.env.NODE_ENV === 'production' ? 'info' : 'debug';
+    const envLevel = (process.env.LOG_LEVEL || defaultLevel).toLowerCase() as LogLevel;
     const validLevels: LogLevel[] = ['debug', 'info', 'warn', 'error'];
-    this.minLevel = validLevels.includes(envLevel) ? envLevel : 'info';
+    this.minLevel = validLevels.includes(envLevel) ? envLevel : defaultLevel;
 
     // Use JSON format in production, readable format in development
     this.useJSON = process.env.NODE_ENV === 'production' || process.env.LOG_FORMAT === 'json';
@@ -97,10 +98,10 @@ class Logger {
     const timestampColor = this.supportsColor ? colors.timestamp : '';
     const contextColor = this.supportsColor ? colors.context : '';
 
-    // Fixed-width spacing: timestamp (12 chars) + 1 space + level (5 chars, includes trailing space) + message
+    // Fixed-width spacing: timestamp (12 chars) + 1 space + level (5 chars) + 1 space + message
     const levelUpper = level.toUpperCase().padEnd(5);
-    // Build output - level already has trailing space from padEnd, so no extra space needed
-    let output = `${timestampColor}${timestamp}${reset} ${levelColor}${levelUpper}${reset}${message}`;
+    // Build output - add space after level
+    let output = `${timestampColor}${timestamp}${reset} ${levelColor}${levelUpper}${reset} ${message}`;
 
     if (context && Object.keys(context).length > 0) {
       // Format context as key=value pairs in gray
