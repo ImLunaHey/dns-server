@@ -42,7 +42,15 @@ export const dnsServer = new DNSServer();
 app.use(
   '/*',
   cors({
-    origin: 'http://localhost:3000',
+    origin: (origin) => {
+      // In development, allow any origin
+      if (process.env.NODE_ENV !== 'production') {
+        return origin || 'http://localhost:3000';
+      }
+      // In production, use explicit allowed origins from env or default
+      const allowedOrigins = process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000'];
+      return allowedOrigins.includes(origin || '') ? origin : 'http://localhost:3000';
+    },
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowHeaders: ['Content-Type', 'Authorization', 'Cookie', 'Set-Cookie', 'x-api-key'],
     exposeHeaders: ['Content-Length', 'Set-Cookie'],

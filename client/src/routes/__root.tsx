@@ -45,6 +45,7 @@ function RootComponent() {
   const isAuthenticated = !!session?.user;
   const isLoginPage = router.state.location.pathname === "/login";
   const isSetupPage = router.state.location.pathname === "/setup";
+  const isPublicPage = router.state.location.pathname === "/";
 
   // Show loading while checking auth
   if (isPending) {
@@ -64,6 +65,18 @@ function RootComponent() {
         <ToastProvider>
           <Outlet />
           <ReactQueryDevtools initialIsOpen={false} />
+        </ToastProvider>
+      </QueryClientProvider>
+    );
+  }
+
+  // Redirect to login if not authenticated and trying to access protected route
+  if (!isAuthenticated && !isPublicPage) {
+    router.navigate({ to: "/login" });
+    return (
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <Loading fullScreen />
         </ToastProvider>
       </QueryClientProvider>
     );

@@ -14,15 +14,24 @@ export const auth = betterAuth({
   baseURL: 'http://localhost:3001',
   basePath: '/api/auth',
   secret: process.env.BETTER_AUTH_SECRET || 'change-me-in-production',
-  trustedOrigins: ['http://localhost:3000'],
+  trustedOrigins: (request: Request) => {
+    const origin = request.headers.get('origin') || '';
+
+    // In development, allow any origin
+    if (process.env.NODE_ENV !== 'production') {
+      return origin ? [origin] : ['http://localhost:3000'];
+    }
+
+    // In production, use explicit trusted origins from env or default
+    const allowedOrigins = process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(',') || ['http://localhost:3000'];
+    return allowedOrigins.includes(origin) ? [origin] : allowedOrigins;
+  },
   advanced: {
     defaultCookieAttributes: {
-      sameSite: 'none',
-      secure: true,
-      partitioned: true,
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      partitioned: process.env.NODE_ENV === 'production',
     },
   },
-  plugins: [
-    apiKey(),
-  ],
+  plugins: [apiKey()],
 });
