@@ -152,7 +152,7 @@ export function Chart({
         return (
           <ResponsiveLine
             data={lineData}
-            margin={{ top: 20, right: 20, bottom: 50, left: 50 }}
+            margin={{ top: 20, right: 20, bottom: 70, left: 70 }}
             xScale={{ type: "point" }}
             yScale={{ type: "linear", min: "auto", max: "auto" }}
             axisTop={null}
@@ -170,7 +170,7 @@ export function Chart({
               tickPadding: 5,
               tickRotation: 0,
               legend: yAxisLabel,
-              legendOffset: -50,
+              legendOffset: -60,
               legendPosition: "middle",
             }}
             pointSize={6}
@@ -196,13 +196,16 @@ export function Chart({
               },
             }}
             tooltip={({ point }) => (
-              <div className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded shadow-lg p-2">
-                <div className="font-semibold text-gray-900 dark:text-white">
+              <div className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg shadow-xl p-3 min-w-[120px]">
+                <div className="text-sm font-semibold text-gray-900 dark:text-white mb-1">
                   {point.data.x}
                 </div>
-                <div className="text-sm">
-                  {yAxisLabel || "Value"}:{" "}
-                  <span className="font-medium">{point.data.y}</span>
+                <div className="text-xs text-gray-600 dark:text-gray-400">
+                  {yAxisLabel || "Value"}
+                </div>
+                <div className="text-base font-semibold text-gray-900 dark:text-white mt-0.5">
+                  {typeof point.data.y === 'number' ? point.data.y.toFixed(2) : point.data.y}
+                  {yAxisLabel?.includes('%') ? '%' : ''}
                 </div>
               </div>
             )}

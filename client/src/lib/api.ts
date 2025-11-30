@@ -69,9 +69,61 @@ export interface DNSStats {
   };
 }
 
+export interface CacheStatistics {
+  overall: {
+    totalQueries: number;
+    cacheHits: number;
+    cacheMisses: number;
+    hitRate: number;
+    missRate: number;
+  };
+  byType: Array<{
+    type: string;
+    totalQueries: number;
+    cacheHits: number;
+    cacheMisses: number;
+    hitRate: number;
+    missRate: number;
+  }>;
+  topCacheHits: Array<{
+    domain: string;
+    totalQueries: number;
+    cacheHits: number;
+    cacheMisses: number;
+    hitRate: number;
+  }>;
+  topCacheMisses: Array<{
+    domain: string;
+    totalQueries: number;
+    cacheHits: number;
+    cacheMisses: number;
+    hitRate: number;
+  }>;
+  hourly: Array<{
+    hour: number;
+    totalQueries: number;
+    cacheHits: number;
+    cacheMisses: number;
+    hitRate: number;
+  }>;
+  timeRange: {
+    start: number;
+    end: number;
+    hours: number;
+  };
+}
+
 export const api = {
   async getStats(): Promise<DNSStats> {
     const response = await fetch(`${API_URL}/api/stats`);
+    return response.json();
+  },
+
+  async getCacheStatistics(hours: number = 24): Promise<CacheStatistics> {
+    const response = await fetch(`${API_URL}/api/stats/cache?hours=${hours}`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch cache statistics: ${response.statusText}`);
+    }
     return response.json();
   },
 

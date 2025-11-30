@@ -803,6 +803,13 @@ app.get('/api/stats/client/:clientIp', requireAuth, (c) => {
   return c.json(stats);
 });
 
+app.get('/api/stats/cache', requireAuth, (c) => {
+  const hoursParam = c.req.query('hours');
+  const hours = hoursParam ? parseInt(hoursParam, 10) : 24;
+  const stats = dbQueries.getCacheStatistics(hours);
+  return c.json(stats);
+});
+
 app.get('/api/stats/patterns', requireAuth, (c) => {
   const hours = parseInt(c.req.query('hours') || '24', 10);
   const patterns = dbQueries.getQueryPatterns(hours);

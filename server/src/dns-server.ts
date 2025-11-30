@@ -227,21 +227,23 @@ export class DNSServer {
         return dbCached.response;
       }
     } else {
-      // Normal lookup - use dbCache.get() which filters expired entries
-      const dbResponse = dbCache.get(domain, type);
-      if (dbResponse) {
-        // Load into memory cache for faster access
-        const dbCached = dbCache.getAll().find((c) => c.domain === domain.toLowerCase() && c.type === type);
-        if (dbCached) {
-          // Still valid, load into memory
-          this.cache.set(key, {
-            response: dbResponse,
-            expiresAt: dbCached.expiresAt,
-            domain: domain.toLowerCase(),
-            type,
-          });
+      // Normal lookup - check database for non-expired entries
+      const dbCached = dbCache.getAll().find((c) => c.domain === domain.toLowerCase() && c.type === type);
+      if (dbCached) {
+        if (now > dbCached.expiresAt) {
+          // Expired, delete it
+          dbCache.delete(domain, type);
+          return null;
         }
-        return dbResponse;
+        // Still valid, load into memory and return
+        logger.debug('Loading cache from database into memory', { domain, type, expiresAt: new Date(dbCached.expiresAt).toISOString() });
+        this.cache.set(key, {
+          response: dbCached.response,
+          expiresAt: dbCached.expiresAt,
+          domain: domain.toLowerCase(),
+          type,
+        });
+        return dbCached.response;
       }
     }
 
@@ -300,24 +302,37 @@ export class DNSServer {
         offset += 10 + dataLength;
       }
 
+      if (minTTL === null) {
+        logger.debug('No TTL found in response (no answers)', { responseLength: response.length });
+      }
       return minTTL;
     } catch (error) {
       logger.error('Error extracting TTL from response', {
         error: error instanceof Error ? error : new Error(String(error)),
+        responseLength: response.length,
       });
       return null;
     }
   }
 
-  private setCachedResponse(domain: string, type: number, response: Buffer) {
-    if (!this.cacheEnabled) return;
+  private setCachedResponse(domain: string, type: number, response: Buffer, customTTL?: number) {
+    if (!this.cacheEnabled) {
+      logger.debug('Cache disabled, not storing response', { domain, type });
+      return;
+    }
 
     const key = this.getCacheKey(domain, type);
 
     // Extract TTL from DNS response, or fall back to default (5 minutes)
-    const responseTTL = this.extractTTLFromResponse(response);
-    const DEFAULT_TTL = 300; // 5 minutes fallback if TTL extraction fails
-    const ttl = responseTTL !== null ? responseTTL : DEFAULT_TTL;
+    // Use custom TTL if provided (e.g., for local DNS entries)
+    let ttl: number;
+    if (customTTL !== undefined) {
+      ttl = customTTL;
+    } else {
+      const responseTTL = this.extractTTLFromResponse(response);
+      const DEFAULT_TTL = 300; // 5 minutes fallback if TTL extraction fails
+      ttl = responseTTL !== null ? responseTTL : DEFAULT_TTL;
+    }
 
     const expiresAt = Date.now() + ttl * 1000;
 
@@ -331,6 +346,8 @@ export class DNSServer {
 
     // Persist to database
     dbCache.set(domain.toLowerCase(), type, response, expiresAt);
+    
+    logger.debug('Cached response', { domain, type, ttl, expiresAt: new Date(expiresAt).toISOString() });
   }
 
   private cleanupCache() {
@@ -391,6 +408,16 @@ export class DNSServer {
   }
 
   getCacheStats() {
+    // Calculate total memory usage of cache (approximate)
+    let totalSize = 0;
+    for (const [key, value] of this.cache.entries()) {
+      totalSize += key.length; // Key size
+      totalSize += value.response.length; // Response buffer size
+      totalSize += 8; // expiresAt (number)
+      totalSize += value.domain.length; // domain string
+      totalSize += 4; // type (number)
+    }
+
     return {
       size: this.cache.size,
       enabled: this.cacheEnabled,
@@ -399,6 +426,8 @@ export class DNSServer {
       prefetchEnabled: this.prefetchEnabled,
       prefetchThreshold: this.prefetchThreshold,
       prefetchMinQueries: this.prefetchMinQueries,
+      memoryUsageBytes: totalSize,
+      memoryUsageMB: Math.round((totalSize / (1024 * 1024)) * 100) / 100,
     };
   }
 
@@ -1961,6 +1990,11 @@ export class DNSServer {
       totalCount: number;
       blockRate: number;
     }>;
+    cacheStats: {
+      size: number;
+      enabled: boolean;
+      memoryUsageMB: number;
+    };
   } {
     // Get all stats from database (persistent)
     const dbStats = dbQueries.getStats();
@@ -1968,6 +2002,7 @@ export class DNSServer {
     const queryTypeBreakdown = dbQueries.getQueryTypeBreakdown();
     const blockPercentageOverTime = dbQueries.getBlockPercentageOverTime(30);
     const topAdvertisers = dbQueries.getTopAdvertisers(20);
+    const cacheStats = this.getCacheStats();
 
     return {
       totalQueries: dbStats.totalQueries,
@@ -1985,6 +2020,11 @@ export class DNSServer {
       queryTypeBreakdown,
       blockPercentageOverTime,
       topAdvertisers,
+      cacheStats: {
+        size: cacheStats.size,
+        enabled: cacheStats.enabled,
+        memoryUsageMB: cacheStats.memoryUsageMB,
+      },
     };
   }
 
@@ -2123,8 +2163,9 @@ export class DNSServer {
     const zone = dbZones.findZoneForDomain(domain);
     if (zone) {
       logger.debug('Authoritative zone found', { domain, zone: zone.domain, queryType: type });
-      const authResponse = this.handleAuthoritativeQuery(msg, domain, type, zone);
-      if (authResponse) {
+      // Check cache first for authoritative queries
+      const cached = this.getCachedResponse(domain, type);
+      if (cached) {
         const queryId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         const query: DNSQuery = {
           id: queryId,
@@ -2134,6 +2175,26 @@ export class DNSServer {
           timestamp: Date.now(),
           clientIp,
           responseTime: Date.now() - startTime,
+          cached: true,
+        };
+        this.addQuery(query);
+        logger.debug('Cached (authoritative)', { domain, type, zone: zone.domain });
+        return cached;
+      }
+      const authResponse = this.handleAuthoritativeQuery(msg, domain, type, zone);
+      if (authResponse) {
+        // Cache authoritative responses
+        this.setCachedResponse(domain, type, authResponse);
+        const queryId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const query: DNSQuery = {
+          id: queryId,
+          domain,
+          type: type === 1 ? 'A' : type === 28 ? 'AAAA' : `TYPE${type}`,
+          blocked: false,
+          timestamp: Date.now(),
+          clientIp,
+          responseTime: Date.now() - startTime,
+          cached: false,
         };
         this.addQuery(query);
         logger.debug('Authoritative response', { domain, type, zone: zone.domain });
@@ -2165,8 +2226,18 @@ export class DNSServer {
       // Check if local DNS type matches query type
       const localType = localDNS.type === 'A' ? 1 : 28;
       if (localType === type) {
-        response = this.createDNSResponseWithIP(msg, localDNS.ip, type);
-        logger.debug('Local DNS', { domain, ip: localDNS.ip, type });
+        // Check cache first for local DNS (in case it was cached from a previous upstream query)
+        const cached = this.getCachedResponse(domain, type);
+        if (cached) {
+          response = cached;
+          isCached = true;
+          logger.debug('Cached (local DNS)', { domain, type });
+        } else {
+          response = this.createDNSResponseWithIP(msg, localDNS.ip, type);
+          // Cache local DNS responses with a reasonable TTL (1 hour = 3600 seconds)
+          this.setCachedResponse(domain, type, response, 3600);
+          logger.debug('Local DNS', { domain, ip: localDNS.ip, type });
+        }
       } else {
         // Type mismatch, check cache first
         const cached = this.getCachedResponse(domain, type);

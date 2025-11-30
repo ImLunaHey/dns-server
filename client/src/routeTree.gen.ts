@@ -24,6 +24,7 @@ import { Route as GroupsRouteImport } from './routes/groups'
 import { Route as DomainsRouteImport } from './routes/domains'
 import { Route as DisableRouteImport } from './routes/disable'
 import { Route as ClientsRouteImport } from './routes/clients'
+import { Route as CacheStatsRouteImport } from './routes/cache-stats'
 import { Route as BlockPageSettingsRouteImport } from './routes/block-page-settings'
 import { Route as ApiKeysRouteImport } from './routes/api-keys'
 import { Route as AllowlistRouteImport } from './routes/allowlist'
@@ -106,6 +107,11 @@ const ClientsRoute = ClientsRouteImport.update({
   path: '/clients',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CacheStatsRoute = CacheStatsRouteImport.update({
+  id: '/cache-stats',
+  path: '/cache-stats',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BlockPageSettingsRoute = BlockPageSettingsRouteImport.update({
   id: '/block-page-settings',
   path: '/block-page-settings',
@@ -143,6 +149,7 @@ export interface FileRoutesByFullPath {
   '/allowlist': typeof AllowlistRoute
   '/api-keys': typeof ApiKeysRoute
   '/block-page-settings': typeof BlockPageSettingsRoute
+  '/cache-stats': typeof CacheStatsRoute
   '/clients': typeof ClientsRouteWithChildren
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
@@ -166,6 +173,7 @@ export interface FileRoutesByTo {
   '/allowlist': typeof AllowlistRoute
   '/api-keys': typeof ApiKeysRoute
   '/block-page-settings': typeof BlockPageSettingsRoute
+  '/cache-stats': typeof CacheStatsRoute
   '/clients': typeof ClientsRouteWithChildren
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
@@ -190,6 +198,7 @@ export interface FileRoutesById {
   '/allowlist': typeof AllowlistRoute
   '/api-keys': typeof ApiKeysRoute
   '/block-page-settings': typeof BlockPageSettingsRoute
+  '/cache-stats': typeof CacheStatsRoute
   '/clients': typeof ClientsRouteWithChildren
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
@@ -215,6 +224,7 @@ export interface FileRouteTypes {
     | '/allowlist'
     | '/api-keys'
     | '/block-page-settings'
+    | '/cache-stats'
     | '/clients'
     | '/disable'
     | '/domains'
@@ -238,6 +248,7 @@ export interface FileRouteTypes {
     | '/allowlist'
     | '/api-keys'
     | '/block-page-settings'
+    | '/cache-stats'
     | '/clients'
     | '/disable'
     | '/domains'
@@ -261,6 +272,7 @@ export interface FileRouteTypes {
     | '/allowlist'
     | '/api-keys'
     | '/block-page-settings'
+    | '/cache-stats'
     | '/clients'
     | '/disable'
     | '/domains'
@@ -285,6 +297,7 @@ export interface RootRouteChildren {
   AllowlistRoute: typeof AllowlistRoute
   ApiKeysRoute: typeof ApiKeysRoute
   BlockPageSettingsRoute: typeof BlockPageSettingsRoute
+  CacheStatsRoute: typeof CacheStatsRoute
   ClientsRoute: typeof ClientsRouteWithChildren
   DisableRoute: typeof DisableRoute
   DomainsRoute: typeof DomainsRoute
@@ -409,6 +422,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ClientsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/cache-stats': {
+      id: '/cache-stats'
+      path: '/cache-stats'
+      fullPath: '/cache-stats'
+      preLoaderRoute: typeof CacheStatsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/block-page-settings': {
       id: '/block-page-settings'
       path: '/block-page-settings'
@@ -471,6 +491,7 @@ const rootRouteChildren: RootRouteChildren = {
   AllowlistRoute: AllowlistRoute,
   ApiKeysRoute: ApiKeysRoute,
   BlockPageSettingsRoute: BlockPageSettingsRoute,
+  CacheStatsRoute: CacheStatsRoute,
   ClientsRoute: ClientsRouteWithChildren,
   DisableRoute: DisableRoute,
   DomainsRoute: DomainsRoute,

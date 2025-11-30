@@ -1217,6 +1217,152 @@ export const dbQueries = {
     `);
     return stmt.all(sinceTimestamp, minQueries) as Array<{ domain: string; type: number; count: number }>;
   },
+
+  getCacheStatistics(hours: number = 24) {
+    const startTime = Date.now() - hours * 60 * 60 * 1000;
+
+    // Overall cache statistics
+    const overallStmt = db.prepare(`
+      SELECT 
+        COUNT(*) as totalQueries,
+        SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END) as cacheHits,
+        SUM(CASE WHEN cached = 0 THEN 1 ELSE 0 END) as cacheMisses
+      FROM queries
+      WHERE timestamp >= ?
+    `);
+    const overall = overallStmt.get(startTime) as {
+      totalQueries: number;
+      cacheHits: number;
+      cacheMisses: number;
+    };
+
+    const hitRate = overall.totalQueries > 0 ? (overall.cacheHits / overall.totalQueries) * 100 : 0;
+    const missRate = overall.totalQueries > 0 ? (overall.cacheMisses / overall.totalQueries) * 100 : 0;
+
+    // Cache statistics by query type
+    const byTypeStmt = db.prepare(`
+      SELECT 
+        type,
+        COUNT(*) as totalQueries,
+        SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END) as cacheHits,
+        SUM(CASE WHEN cached = 0 THEN 1 ELSE 0 END) as cacheMisses
+      FROM queries
+      WHERE timestamp >= ?
+      GROUP BY type
+      ORDER BY totalQueries DESC
+    `);
+    const byType = (byTypeStmt.all(startTime) as Array<{
+      type: string;
+      totalQueries: number;
+      cacheHits: number;
+      cacheMisses: number;
+    }>).map((row) => ({
+      type: row.type,
+      totalQueries: row.totalQueries,
+      cacheHits: row.cacheHits,
+      cacheMisses: row.cacheMisses,
+      hitRate: row.totalQueries > 0 ? Math.round((row.cacheHits / row.totalQueries) * 100 * 100) / 100 : 0,
+      missRate: row.totalQueries > 0 ? Math.round((row.cacheMisses / row.totalQueries) * 100 * 100) / 100 : 0,
+    }));
+
+    // Top domains by cache hits
+    const topCacheHitsStmt = db.prepare(`
+      SELECT 
+        domain,
+        COUNT(*) as totalQueries,
+        SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END) as cacheHits,
+        SUM(CASE WHEN cached = 0 THEN 1 ELSE 0 END) as cacheMisses
+      FROM queries
+      WHERE timestamp >= ? AND blocked = 0
+      GROUP BY domain
+      HAVING cacheHits > 0
+      ORDER BY cacheHits DESC
+      LIMIT 20
+    `);
+    const topCacheHits = (topCacheHitsStmt.all(startTime) as Array<{
+      domain: string;
+      totalQueries: number;
+      cacheHits: number;
+      cacheMisses: number;
+    }>).map((row) => ({
+      domain: row.domain,
+      totalQueries: row.totalQueries,
+      cacheHits: row.cacheHits,
+      cacheMisses: row.cacheMisses,
+      hitRate: row.totalQueries > 0 ? Math.round((row.cacheHits / row.totalQueries) * 100 * 100) / 100 : 0,
+    }));
+
+    // Top domains by cache misses (domains that could benefit from caching)
+    const topCacheMissesStmt = db.prepare(`
+      SELECT 
+        domain,
+        COUNT(*) as totalQueries,
+        SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END) as cacheHits,
+        SUM(CASE WHEN cached = 0 THEN 1 ELSE 0 END) as cacheMisses
+      FROM queries
+      WHERE timestamp >= ? AND blocked = 0
+      GROUP BY domain
+      HAVING cacheMisses > 0
+      ORDER BY cacheMisses DESC
+      LIMIT 20
+    `);
+    const topCacheMisses = (topCacheMissesStmt.all(startTime) as Array<{
+      domain: string;
+      totalQueries: number;
+      cacheHits: number;
+      cacheMisses: number;
+    }>).map((row) => ({
+      domain: row.domain,
+      totalQueries: row.totalQueries,
+      cacheHits: row.cacheHits,
+      cacheMisses: row.cacheMisses,
+      hitRate: row.totalQueries > 0 ? Math.round((row.cacheHits / row.totalQueries) * 100 * 100) / 100 : 0,
+    }));
+
+    // Cache statistics over time (hourly)
+    const hourlyStmt = db.prepare(`
+      SELECT 
+        CAST((timestamp - ?) / (60 * 60 * 1000) as INTEGER) as hour,
+        COUNT(*) as totalQueries,
+        SUM(CASE WHEN cached = 1 THEN 1 ELSE 0 END) as cacheHits,
+        SUM(CASE WHEN cached = 0 THEN 1 ELSE 0 END) as cacheMisses
+      FROM queries
+      WHERE timestamp >= ?
+      GROUP BY hour
+      ORDER BY hour ASC
+    `);
+    const hourly = (hourlyStmt.all(startTime, startTime) as Array<{
+      hour: number;
+      totalQueries: number;
+      cacheHits: number;
+      cacheMisses: number;
+    }>).map((row) => ({
+      hour: row.hour,
+      totalQueries: row.totalQueries,
+      cacheHits: row.cacheHits,
+      cacheMisses: row.cacheMisses,
+      hitRate: row.totalQueries > 0 ? Math.round((row.cacheHits / row.totalQueries) * 100 * 100) / 100 : 0,
+    }));
+
+    return {
+      overall: {
+        totalQueries: overall.totalQueries,
+        cacheHits: overall.cacheHits,
+        cacheMisses: overall.cacheMisses,
+        hitRate: Math.round(hitRate * 100) / 100,
+        missRate: Math.round(missRate * 100) / 100,
+      },
+      byType,
+      topCacheHits,
+      topCacheMisses,
+      hourly,
+      timeRange: {
+        start: startTime,
+        end: Date.now(),
+        hours,
+      },
+    };
+  },
 };
 
 export const dbClientNames = {
