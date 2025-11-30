@@ -1287,25 +1287,10 @@ app.delete('/api/tsig-keys/:id', requireAuth, (c) => {
 
 // Simple HTTP-based DDNS update endpoint (no auth required - uses token)
 app.get('/api/ddns/update', async (c) => {
-  const domain = c.req.query('domain');
   const token = c.req.query('token');
-  
-  // Get client IP from request headers (standard for DDNS services)
-  const forwardedFor = c.req.header('x-forwarded-for');
-  const realIp = c.req.header('x-real-ip');
-  const cfConnectingIp = c.req.header('cf-connecting-ip');
-  
-  // Allow explicit IP override via query params (for clients behind proxies)
-  const explicitIp = c.req.query('ip') || c.req.query('myip');
-  const explicitIpv6 = c.req.query('ipv6') || c.req.query('myipv6');
-  
-  // Extract client IP - prefer explicit, then headers, then connection IP
-  const detectedIp = forwardedFor?.split(',')[0]?.trim() || realIp?.trim() || cfConnectingIp?.trim();
-  const ip = explicitIp || detectedIp;
-  const ipv6 = explicitIpv6;
 
-  if (!domain || !token) {
-    return c.json({ error: 'domain and token are required' }, 400);
+  if (!token) {
+    return c.json({ error: 'token is required' }, 400);
   }
 
   const ddnsToken = dbDDNSTokens.getByToken(token);
@@ -1313,9 +1298,22 @@ app.get('/api/ddns/update', async (c) => {
     return c.json({ error: 'Invalid token' }, 401);
   }
 
-  if (ddnsToken.domain.toLowerCase() !== domain.toLowerCase()) {
-    return c.json({ error: 'Domain mismatch' }, 403);
-  }
+  // Use the domain associated with the token
+  const domain = ddnsToken.domain;
+
+  // Get client IP from request headers (standard for DDNS services)
+  const forwardedFor = c.req.header('x-forwarded-for');
+  const realIp = c.req.header('x-real-ip');
+  const cfConnectingIp = c.req.header('cf-connecting-ip');
+
+  // Allow explicit IP override via query params (for clients behind proxies)
+  const explicitIp = c.req.query('ip') || c.req.query('myip');
+  const explicitIpv6 = c.req.query('ipv6') || c.req.query('myipv6');
+
+  // Extract client IP - prefer explicit, then headers, then connection IP
+  const detectedIp = forwardedFor?.split(',')[0]?.trim() || realIp?.trim() || cfConnectingIp?.trim();
+  const ip = explicitIp || detectedIp;
+  const ipv6 = explicitIpv6;
 
   // Find the zone for this domain
   const zone = dbZones.findZoneForDomain(domain);
@@ -1326,9 +1324,7 @@ app.get('/api/ddns/update', async (c) => {
   // Update or create A record (if we have an IPv4 address)
   if (ip && ip.includes('.')) {
     const recordName = '@'; // Root of zone
-    const existing = dbZoneRecords.getByZone(zone.id).find(
-      (r) => r.name === recordName && r.type === 'A'
-    );
+    const existing = dbZoneRecords.getByZone(zone.id).find((r) => r.name === recordName && r.type === 'A');
 
     if (existing) {
       dbZoneRecords.update(existing.id, { data: ip, ttl: 300 });
@@ -1344,12 +1340,10 @@ app.get('/api/ddns/update', async (c) => {
   // Check if detected IP is IPv6, or use explicit IPv6 parameter
   const detectedIpv6 = detectedIp && detectedIp.includes(':') ? detectedIp : null;
   const finalIpv6 = explicitIpv6 || detectedIpv6;
-  
+
   if (finalIpv6) {
     const recordName = '@';
-    const existing = dbZoneRecords.getByZone(zone.id).find(
-      (r) => r.name === recordName && r.type === 'AAAA'
-    );
+    const existing = dbZoneRecords.getByZone(zone.id).find((r) => r.name === recordName && r.type === 'AAAA');
 
     if (existing) {
       dbZoneRecords.update(existing.id, { data: finalIpv6, ttl: 300 });
@@ -1396,6 +1390,19 @@ app.post('/api/ddns-tokens', requireAuth, async (c) => {
 
   dbDDNSTokens.create(domain, token, recordType || 'A');
   return c.json({ success: true, token });
+});
+
+app.put('/api/ddns-tokens/:id', requireAuth, async (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  const { domain, recordType } = await c.req.json();
+  if (!domain) {
+    return c.json({ error: 'domain is required' }, 400);
+  }
+
+  // Update domain and record type for the token
+  const stmt = db.prepare('UPDATE ddns_tokens SET domain = ?, record_type = ?, updatedAt = ? WHERE id = ?');
+  stmt.run(domain.toLowerCase(), (recordType || 'A').toUpperCase(), Date.now(), id);
+  return c.json({ success: true });
 });
 
 app.put('/api/ddns-tokens/:id/enable', requireAuth, async (c) => {

@@ -18,9 +18,10 @@ export function DDNS() {
   const [newName, setNewName] = useState("");
   const [newAlgorithm, setNewAlgorithm] = useState("hmac-sha256");
   const [newSecret, setNewSecret] = useState("");
-  
+
   // Simple DDNS token state
   const [showAddTokenForm, setShowAddTokenForm] = useState(false);
+  const [editingTokenId, setEditingTokenId] = useState<number | null>(null);
   const [newTokenDomain, setNewTokenDomain] = useState("");
   const [newTokenRecordType, setNewTokenRecordType] = useState("A");
 
@@ -85,12 +86,13 @@ export function DDNS() {
   const createToken = useMutation({
     mutationFn: (data: { domain: string; recordType?: string }) =>
       api.createDDNSToken(data),
-    onSuccess: (data, variables) => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["ddns-tokens"] });
       setShowAddTokenForm(false);
-      const domain = variables.domain;
-      setNewTokenDomain("");
-      toast.success(`DDNS token created! Use: ${window.location.origin}/api/ddns/update?domain=${domain}&token=${data.token}`);
+      resetTokenForm();
+      toast.success(
+        `DDNS token created! Use: ${window.location.origin}/api/ddns/update?token=${data.token}`
+      );
     },
     onError: (error: Error) => {
       toast.error(error.message || "Failed to create DDNS token");
@@ -120,6 +122,31 @@ export function DDNS() {
     },
   });
 
+  const updateToken = useMutation({
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: number;
+      data: { domain: string; recordType?: string };
+    }) => api.updateDDNSToken(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ddns-tokens"] });
+      setEditingTokenId(null);
+      setShowAddTokenForm(false);
+      resetTokenForm();
+      toast.success("DDNS token updated successfully");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to update DDNS token");
+    },
+  });
+
+  const resetTokenForm = () => {
+    setNewTokenDomain("");
+    setNewTokenRecordType("A");
+  };
+
   const handleAddToken = () => {
     if (newTokenDomain.trim()) {
       createToken.mutate({
@@ -127,6 +154,31 @@ export function DDNS() {
         recordType: newTokenRecordType,
       });
     }
+  };
+
+  const handleEditToken = (token: (typeof tokens)[0]) => {
+    setEditingTokenId(token.id);
+    setNewTokenDomain(token.domain);
+    setNewTokenRecordType(token.recordType);
+    setShowAddTokenForm(true);
+  };
+
+  const handleUpdateToken = () => {
+    if (editingTokenId && newTokenDomain.trim()) {
+      updateToken.mutate({
+        id: editingTokenId,
+        data: {
+          domain: newTokenDomain.trim(),
+          recordType: newTokenRecordType,
+        },
+      });
+    }
+  };
+
+  const handleCancelToken = () => {
+    setShowAddTokenForm(false);
+    setEditingTokenId(null);
+    resetTokenForm();
   };
 
   if (isLoading || tokensLoading) {
@@ -244,8 +296,7 @@ export function DDNS() {
                   },
                   {
                     header: "Created",
-                    accessor: (row) =>
-                      new Date(row.createdAt).toLocaleString(),
+                    accessor: (row) => new Date(row.createdAt).toLocaleString(),
                   },
                 ]}
                 actions={(row) => [
@@ -289,6 +340,9 @@ export function DDNS() {
             </div>
             {showAddTokenForm && (
               <div className="mb-4 p-4 border border-gray-200 dark:border-gray-700 rounded">
+                <h3 className="text-md font-medium text-gray-900 dark:text-white mb-4">
+                  {editingTokenId ? "Edit Token" : "Add New Token"}
+                </h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <FormField label="Domain">
                     <Input
@@ -309,21 +363,19 @@ export function DDNS() {
                   </FormField>
                   <div className="flex items-end gap-2">
                     <Button
-                      onClick={handleAddToken}
+                      onClick={
+                        editingTokenId ? handleUpdateToken : handleAddToken
+                      }
                       disabled={
-                        createToken.isPending || !newTokenDomain.trim()
+                        (editingTokenId
+                          ? updateToken.isPending
+                          : createToken.isPending) || !newTokenDomain.trim()
                       }
                       className="flex-1"
                     >
-                      Create Token
+                      {editingTokenId ? "Update Token" : "Create Token"}
                     </Button>
-                    <Button
-                      onClick={() => {
-                        setShowAddTokenForm(false);
-                        setNewTokenDomain("");
-                      }}
-                      variant="outline"
-                    >
+                    <Button onClick={handleCancelToken} variant="outline">
                       Cancel
                     </Button>
                   </div>
@@ -332,7 +384,8 @@ export function DDNS() {
             )}
             {tokens.length === 0 ? (
               <p className="text-gray-500 dark:text-gray-400">
-                No DDNS tokens configured. Create one to enable simple HTTP-based IP updates.
+                No DDNS tokens configured. Create one to enable simple
+                HTTP-based IP updates.
               </p>
             ) : (
               <DataTable
@@ -345,7 +398,8 @@ export function DDNS() {
                     header: "Update URL",
                     accessor: (row) => (
                       <code className="text-xs bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded block break-all font-mono">
-                        {window.location.origin}/api/ddns/update?domain={row.domain}&token={row.token}
+                        {window.location.origin}/api/ddns/update?token=
+                        {row.token}
                       </code>
                     ),
                   },
@@ -365,6 +419,11 @@ export function DDNS() {
                   },
                 ]}
                 actions={(row) => [
+                  {
+                    title: "Edit",
+                    color: "blue" as const,
+                    onClick: () => handleEditToken(row),
+                  },
                   {
                     title: row.enabled ? "Disable" : "Enable",
                     color: "blue" as const,
@@ -398,68 +457,99 @@ export function DDNS() {
             </h2>
             <div className="space-y-3 text-sm text-gray-700 dark:text-gray-300">
               <p>
-                <strong>Dynamic DNS (DDNS)</strong> allows clients to update DNS records dynamically
-                when IP addresses change. This is useful for:
+                <strong>Dynamic DNS (DDNS)</strong> allows clients to update DNS
+                records dynamically when IP addresses change. This is useful
+                for:
               </p>
               <ul className="list-disc list-inside space-y-1 ml-4">
-                <li>Automatically updating A/AAAA records when your IP address changes</li>
-                <li>Remote management of DNS records via scripts or applications</li>
-                <li>Integrating with DHCP servers to update DNS automatically</li>
-                <li>Home server setups that need to stay accessible with changing IPs</li>
+                <li>
+                  Automatically updating A/AAAA records when your IP address
+                  changes
+                </li>
+                <li>
+                  Remote management of DNS records via scripts or applications
+                </li>
+                <li>
+                  Integrating with DHCP servers to update DNS automatically
+                </li>
+                <li>
+                  Home server setups that need to stay accessible with changing
+                  IPs
+                </li>
               </ul>
               <p className="mt-4">
                 <strong>Two Methods Available:</strong>
               </p>
               <ol className="list-decimal list-inside space-y-2 ml-4">
                 <li>
-                  <strong>Simple HTTP-based DDNS (Recommended for most apps):</strong> Your app sends a GET request to a URL when your IP changes. No special DNS knowledge required. Just use the token URL provided above.
+                  <strong>
+                    Simple HTTP-based DDNS (Recommended for most apps):
+                  </strong>{" "}
+                  Your app sends a GET request to a URL when your IP changes. No
+                  special DNS knowledge required. Just use the token URL
+                  provided above.
                 </li>
                 <li>
-                  <strong>TSIG-based DDNS (RFC 2136/2845):</strong> Full DNS UPDATE protocol support with TSIG authentication. Use this if your client supports DNS UPDATE (e.g., nsupdate, ISC DHCP).
+                  <strong>TSIG-based DDNS (RFC 2136/2845):</strong> Full DNS
+                  UPDATE protocol support with TSIG authentication. Use this if
+                  your client supports DNS UPDATE (e.g., nsupdate, ISC DHCP).
                 </li>
               </ol>
               <p className="mt-4">
-                <strong>TSIG (Transaction Signature)</strong> provides authentication for DNS UPDATE
-                requests (RFC 2845). Each TSIG key consists of:
+                <strong>TSIG (Transaction Signature)</strong> provides
+                authentication for DNS UPDATE requests (RFC 2845). Each TSIG key
+                consists of:
               </p>
               <ul className="list-disc list-inside space-y-1 ml-4">
                 <li>
-                  <strong>Name:</strong> A unique identifier for the key (e.g., "mykey" or "dhcp-key")
+                  <strong>Name:</strong> A unique identifier for the key (e.g.,
+                  "mykey" or "dhcp-key")
                 </li>
                 <li>
-                  <strong>Algorithm:</strong> The HMAC algorithm used (HMAC-SHA256 recommended)
+                  <strong>Algorithm:</strong> The HMAC algorithm used
+                  (HMAC-SHA256 recommended)
                 </li>
                 <li>
-                  <strong>Secret:</strong> A base64-encoded shared secret key (both client and server
-                  must have the same secret)
+                  <strong>Secret:</strong> A base64-encoded shared secret key
+                  (both client and server must have the same secret)
                 </li>
               </ul>
               <p>
                 <strong>How it works:</strong>
               </p>
               <ol className="list-decimal list-inside space-y-1 ml-4">
-                <li>Create a TSIG key here with a name, algorithm, and base64-encoded secret</li>
                 <li>
-                  Configure your client (e.g., <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">nsupdate</code>, DHCP server, or custom script) with the same key name and secret
+                  Create a TSIG key here with a name, algorithm, and
+                  base64-encoded secret
                 </li>
                 <li>
-                  The client sends DNS UPDATE requests signed with the TSIG key to modify DNS records
+                  Configure your client (e.g.,{" "}
+                  <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">
+                    nsupdate
+                  </code>
+                  , DHCP server, or custom script) with the same key name and
+                  secret
                 </li>
                 <li>
-                  The server verifies the TSIG signature and updates the records if valid
+                  The client sends DNS UPDATE requests signed with the TSIG key
+                  to modify DNS records
+                </li>
+                <li>
+                  The server verifies the TSIG signature and updates the records
+                  if valid
                 </li>
               </ol>
               <p>
-                <strong>Generating a TSIG key secret:</strong> You can generate a base64-encoded secret
-                using:
+                <strong>Generating a TSIG key secret:</strong> You can generate
+                a base64-encoded secret using:
               </p>
               <pre className="bg-gray-100 dark:bg-gray-800 p-3 rounded text-xs overflow-x-auto">
                 <code>
-                  # Generate a random 32-byte secret and encode in base64{'\n'}
-                  openssl rand -base64 32{'\n'}
-                  {'\n'}
-                  # Or using Python:{'\n'}
-                  python3 -c "import secrets, base64; print(base64.b64encode(secrets.token_bytes(32)).decode())"
+                  # Generate a random 32-byte secret and encode in base64{"\n"}
+                  openssl rand -base64 32{"\n"}
+                  {"\n"}# Or using Python:{"\n"}
+                  python3 -c "import secrets, base64;
+                  print(base64.b64encode(secrets.token_bytes(32)).decode())"
                 </code>
               </pre>
               <p className="mt-4">
@@ -467,20 +557,19 @@ export function DDNS() {
               </p>
               <pre className="bg-gray-100 dark:bg-gray-800 p-3 rounded text-xs overflow-x-auto mt-2">
                 <code>
-                  # Update an A record using nsupdate{'\n'}
-                  nsupdate -k keyfile.conf{'\n'}
-                  {'\n'}
-                  # In nsupdate prompt:{'\n'}
-                  server your-dns-server.com{'\n'}
-                  zone example.com{'\n'}
-                  update add www.example.com 3600 A 192.168.1.100{'\n'}
-                  send{'\n'}
-                  {'\n'}
-                  # keyfile.conf format:{'\n'}
-                  key "key-name" {'{'}{'\n'}
-                  {'    '}algorithm hmac-sha256;{'\n'}
-                  {'    '}secret "base64-secret-here";{'\n'}
-                  {'}'};
+                  # Update an A record using nsupdate{"\n"}
+                  nsupdate -k keyfile.conf{"\n"}
+                  {"\n"}# In nsupdate prompt:{"\n"}
+                  server your-dns-server.com{"\n"}
+                  zone example.com{"\n"}
+                  update add www.example.com 3600 A 192.168.1.100{"\n"}
+                  send{"\n"}
+                  {"\n"}# keyfile.conf format:{"\n"}
+                  key "key-name" {"{"}
+                  {"\n"}
+                  {"    "}algorithm hmac-sha256;{"\n"}
+                  {"    "}secret "base64-secret-here";{"\n"}
+                  {"}"};
                 </code>
               </pre>
             </div>
@@ -490,4 +579,3 @@ export function DDNS() {
     </>
   );
 }
-

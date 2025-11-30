@@ -1040,4 +1040,16 @@ export const api = {
     });
     if (!response.ok) throw new Error("Failed to delete DDNS token");
   },
+
+  async updateDDNSToken(
+    id: number,
+    data: { domain: string; recordType?: string }
+  ): Promise<void> {
+    const response = await fetch(`${API_URL}/api/ddns-tokens/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) throw new Error("Failed to update DDNS token");
+  },
 };
