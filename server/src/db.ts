@@ -280,6 +280,20 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_tsig_keys_name ON tsig_keys(name);
   CREATE INDEX IF NOT EXISTS idx_tsig_keys_enabled ON tsig_keys(enabled);
 
+  -- Simple HTTP-based DDNS tokens
+  CREATE TABLE IF NOT EXISTS ddns_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain TEXT NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    record_type TEXT NOT NULL DEFAULT 'A',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ddns_tokens_token ON ddns_tokens(token);
+  CREATE INDEX IF NOT EXISTS idx_ddns_tokens_domain ON ddns_tokens(domain);
+
   -- Better-auth tables
   CREATE TABLE IF NOT EXISTS "user" (
     "id" text not null primary key,
@@ -2934,6 +2948,61 @@ export const dbTSIGKeys = {
 
   delete(id: number) {
     const stmt = db.prepare('DELETE FROM tsig_keys WHERE id = ?');
+    stmt.run(id);
+  },
+};
+
+export const dbDDNSTokens = {
+  create(domain: string, token: string, recordType: string = 'A') {
+    const now = Date.now();
+    const stmt = db.prepare(`
+      INSERT INTO ddns_tokens (domain, token, record_type, enabled, createdAt, updatedAt)
+      VALUES (?, ?, ?, 1, ?, ?)
+    `);
+    const result = stmt.run(domain.toLowerCase(), token, recordType.toUpperCase(), now, now);
+    return result.lastInsertRowid as number;
+  },
+
+  getByToken(token: string): {
+    id: number;
+    domain: string;
+    token: string;
+    record_type: string;
+    enabled: number;
+  } | null {
+    const stmt = db.prepare('SELECT * FROM ddns_tokens WHERE token = ? AND enabled = 1');
+    const row = stmt.get(token) as
+      | {
+          id: number;
+          domain: string;
+          token: string;
+          record_type: string;
+          enabled: number;
+        }
+      | undefined;
+    return row || null;
+  },
+
+  getAll() {
+    const stmt = db.prepare('SELECT * FROM ddns_tokens ORDER BY domain ASC, createdAt DESC');
+    return stmt.all() as Array<{
+      id: number;
+      domain: string;
+      token: string;
+      record_type: string;
+      enabled: number;
+      createdAt: number;
+      updatedAt: number;
+    }>;
+  },
+
+  setEnabled(id: number, enabled: boolean) {
+    const stmt = db.prepare('UPDATE ddns_tokens SET enabled = ?, updatedAt = ? WHERE id = ?');
+    stmt.run(enabled ? 1 : 0, Date.now(), id);
+  },
+
+  delete(id: number) {
+    const stmt = db.prepare('DELETE FROM ddns_tokens WHERE id = ?');
     stmt.run(id);
   },
 };

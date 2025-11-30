@@ -26,7 +26,7 @@ const navigation = [
   { name: "Local DNS", href: "/local-dns", icon: "🏠" },
   { name: "Conditional Forwarding", href: "/conditional-forwarding", icon: "🔄" },
   { name: "Zones", href: "/zones", icon: "🌍" },
-  { name: "TSIG Keys", href: "/tsig-keys", icon: "🔐" },
+  { name: "DDNS", href: "/ddns", icon: "🔄" },
   { name: "Tools", href: "/tools", icon: "🔧" },
   { name: "Settings", href: "/settings", icon: "⚙️" },
   { name: "Block Page", href: "/block-page-settings", icon: "🚫" },

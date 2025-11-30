@@ -29,6 +29,7 @@ import {
   dbZones,
   dbZoneRecords,
   dbTSIGKeys,
+  dbDDNSTokens,
 } from './db.js';
 import db from './db.js';
 import { auth } from './auth.js';
@@ -1281,6 +1282,135 @@ app.put('/api/tsig-keys/:id/enable', requireAuth, async (c) => {
 app.delete('/api/tsig-keys/:id', requireAuth, (c) => {
   const id = parseInt(c.req.param('id'), 10);
   dbTSIGKeys.delete(id);
+  return c.json({ success: true });
+});
+
+// Simple HTTP-based DDNS update endpoint (no auth required - uses token)
+app.get('/api/ddns/update', async (c) => {
+  const domain = c.req.query('domain');
+  const token = c.req.query('token');
+  
+  // Get client IP from request headers (standard for DDNS services)
+  const forwardedFor = c.req.header('x-forwarded-for');
+  const realIp = c.req.header('x-real-ip');
+  const cfConnectingIp = c.req.header('cf-connecting-ip');
+  
+  // Allow explicit IP override via query params (for clients behind proxies)
+  const explicitIp = c.req.query('ip') || c.req.query('myip');
+  const explicitIpv6 = c.req.query('ipv6') || c.req.query('myipv6');
+  
+  // Extract client IP - prefer explicit, then headers, then connection IP
+  const detectedIp = forwardedFor?.split(',')[0]?.trim() || realIp?.trim() || cfConnectingIp?.trim();
+  const ip = explicitIp || detectedIp;
+  const ipv6 = explicitIpv6;
+
+  if (!domain || !token) {
+    return c.json({ error: 'domain and token are required' }, 400);
+  }
+
+  const ddnsToken = dbDDNSTokens.getByToken(token);
+  if (!ddnsToken) {
+    return c.json({ error: 'Invalid token' }, 401);
+  }
+
+  if (ddnsToken.domain.toLowerCase() !== domain.toLowerCase()) {
+    return c.json({ error: 'Domain mismatch' }, 403);
+  }
+
+  // Find the zone for this domain
+  const zone = dbZones.findZoneForDomain(domain);
+  if (!zone) {
+    return c.json({ error: 'Zone not found' }, 404);
+  }
+
+  // Update or create A record (if we have an IPv4 address)
+  if (ip && ip.includes('.')) {
+    const recordName = '@'; // Root of zone
+    const existing = dbZoneRecords.getByZone(zone.id).find(
+      (r) => r.name === recordName && r.type === 'A'
+    );
+
+    if (existing) {
+      dbZoneRecords.update(existing.id, { data: ip, ttl: 300 });
+    } else {
+      dbZoneRecords.create(zone.id, recordName, 'A', 300, ip);
+    }
+
+    // Update SOA serial
+    dbZones.update(zone.id, { soa_serial: zone.soa_serial + 1 });
+  }
+
+  // Update or create AAAA record (if we have an IPv6 address)
+  // Check if detected IP is IPv6, or use explicit IPv6 parameter
+  const detectedIpv6 = detectedIp && detectedIp.includes(':') ? detectedIp : null;
+  const finalIpv6 = explicitIpv6 || detectedIpv6;
+  
+  if (finalIpv6) {
+    const recordName = '@';
+    const existing = dbZoneRecords.getByZone(zone.id).find(
+      (r) => r.name === recordName && r.type === 'AAAA'
+    );
+
+    if (existing) {
+      dbZoneRecords.update(existing.id, { data: finalIpv6, ttl: 300 });
+    } else {
+      dbZoneRecords.create(zone.id, recordName, 'AAAA', 300, finalIpv6);
+    }
+
+    // Update SOA serial
+    dbZones.update(zone.id, { soa_serial: zone.soa_serial + 1 });
+  }
+
+  if (!ip && !finalIpv6) {
+    return c.json({ error: 'Could not detect client IP address' }, 400);
+  }
+
+  return c.json({ success: true, message: 'DNS record updated', ip: ip || undefined, ipv6: finalIpv6 || undefined });
+});
+
+// DDNS Tokens management
+app.get('/api/ddns-tokens', requireAuth, (c) => {
+  const tokens = dbDDNSTokens.getAll();
+  return c.json(
+    tokens.map((token) => ({
+      id: token.id,
+      domain: token.domain,
+      token: token.token,
+      recordType: token.record_type,
+      enabled: token.enabled === 1,
+      createdAt: token.createdAt,
+      updatedAt: token.updatedAt,
+    })),
+  );
+});
+
+app.post('/api/ddns-tokens', requireAuth, async (c) => {
+  const { domain, recordType } = await c.req.json();
+  if (!domain) {
+    return c.json({ error: 'domain is required' }, 400);
+  }
+
+  // Generate a random token
+  const crypto = await import('crypto');
+  const token = crypto.randomBytes(32).toString('base64url');
+
+  dbDDNSTokens.create(domain, token, recordType || 'A');
+  return c.json({ success: true, token });
+});
+
+app.put('/api/ddns-tokens/:id/enable', requireAuth, async (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  const { enabled } = await c.req.json();
+  if (typeof enabled !== 'boolean') {
+    return c.json({ error: 'enabled must be a boolean' }, 400);
+  }
+  dbDDNSTokens.setEnabled(id, enabled);
+  return c.json({ success: true });
+});
+
+app.delete('/api/ddns-tokens/:id', requireAuth, (c) => {
+  const id = parseInt(c.req.param('id'), 10);
+  dbDDNSTokens.delete(id);
   return c.json({ success: true });
 });
 

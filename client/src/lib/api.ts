@@ -991,4 +991,53 @@ export const api = {
       throw new Error(error.error || "Failed to delete zone record");
     }
   },
+
+  // Simple HTTP-based DDNS Tokens
+  async getDDNSTokens(): Promise<
+    Array<{
+      id: number;
+      domain: string;
+      token: string;
+      recordType: string;
+      enabled: boolean;
+      createdAt: number;
+      updatedAt: number;
+    }>
+  > {
+    const response = await fetch(`${API_URL}/api/ddns-tokens`);
+    if (!response.ok) throw new Error("Failed to fetch DDNS tokens");
+    return response.json();
+  },
+
+  async createDDNSToken(data: {
+    domain: string;
+    recordType?: string;
+  }): Promise<{ success: boolean; token: string }> {
+    const response = await fetch(`${API_URL}/api/ddns-tokens`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!response.ok) throw new Error("Failed to create DDNS token");
+    return response.json();
+  },
+
+  async updateDDNSTokenEnabled(
+    id: number,
+    enabled: boolean
+  ): Promise<void> {
+    const response = await fetch(`${API_URL}/api/ddns-tokens/${id}/enable`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!response.ok) throw new Error("Failed to update DDNS token");
+  },
+
+  async deleteDDNSToken(id: number): Promise<void> {
+    const response = await fetch(`${API_URL}/api/ddns-tokens/${id}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) throw new Error("Failed to delete DDNS token");
+  },
 };

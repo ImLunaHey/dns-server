@@ -11,7 +11,6 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ZonesRouteImport } from './routes/zones'
 import { Route as UiComponentsRouteImport } from './routes/ui-components'
-import { Route as TsigKeysRouteImport } from './routes/tsig-keys'
 import { Route as ToolsRouteImport } from './routes/tools'
 import { Route as SetupRouteImport } from './routes/setup'
 import { Route as SettingsRouteImport } from './routes/settings'
@@ -25,6 +24,7 @@ import { Route as HealthRouteImport } from './routes/health'
 import { Route as GroupsRouteImport } from './routes/groups'
 import { Route as DomainsRouteImport } from './routes/domains'
 import { Route as DisableRouteImport } from './routes/disable'
+import { Route as DdnsRouteImport } from './routes/ddns'
 import { Route as ConditionalForwardingRouteImport } from './routes/conditional-forwarding'
 import { Route as ClientsRouteImport } from './routes/clients'
 import { Route as CacheStatsRouteImport } from './routes/cache-stats'
@@ -43,11 +43,6 @@ const ZonesRoute = ZonesRouteImport.update({
 const UiComponentsRoute = UiComponentsRouteImport.update({
   id: '/ui-components',
   path: '/ui-components',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const TsigKeysRoute = TsigKeysRouteImport.update({
-  id: '/tsig-keys',
-  path: '/tsig-keys',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ToolsRoute = ToolsRouteImport.update({
@@ -115,6 +110,11 @@ const DisableRoute = DisableRouteImport.update({
   path: '/disable',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DdnsRoute = DdnsRouteImport.update({
+  id: '/ddns',
+  path: '/ddns',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ConditionalForwardingRoute = ConditionalForwardingRouteImport.update({
   id: '/conditional-forwarding',
   path: '/conditional-forwarding',
@@ -170,6 +170,7 @@ export interface FileRoutesByFullPath {
   '/cache-stats': typeof CacheStatsRoute
   '/clients': typeof ClientsRouteWithChildren
   '/conditional-forwarding': typeof ConditionalForwardingRoute
+  '/ddns': typeof DdnsRoute
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
   '/groups': typeof GroupsRoute
@@ -183,7 +184,6 @@ export interface FileRoutesByFullPath {
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
-  '/tsig-keys': typeof TsigKeysRoute
   '/ui-components': typeof UiComponentsRoute
   '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
@@ -197,6 +197,7 @@ export interface FileRoutesByTo {
   '/cache-stats': typeof CacheStatsRoute
   '/clients': typeof ClientsRouteWithChildren
   '/conditional-forwarding': typeof ConditionalForwardingRoute
+  '/ddns': typeof DdnsRoute
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
   '/groups': typeof GroupsRoute
@@ -210,7 +211,6 @@ export interface FileRoutesByTo {
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
-  '/tsig-keys': typeof TsigKeysRoute
   '/ui-components': typeof UiComponentsRoute
   '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
@@ -225,6 +225,7 @@ export interface FileRoutesById {
   '/cache-stats': typeof CacheStatsRoute
   '/clients': typeof ClientsRouteWithChildren
   '/conditional-forwarding': typeof ConditionalForwardingRoute
+  '/ddns': typeof DdnsRoute
   '/disable': typeof DisableRoute
   '/domains': typeof DomainsRoute
   '/groups': typeof GroupsRoute
@@ -238,7 +239,6 @@ export interface FileRoutesById {
   '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
   '/tools': typeof ToolsRoute
-  '/tsig-keys': typeof TsigKeysRoute
   '/ui-components': typeof UiComponentsRoute
   '/zones': typeof ZonesRoute
   '/clients/$clientIp/stats': typeof ClientsClientIpStatsRoute
@@ -254,6 +254,7 @@ export interface FileRouteTypes {
     | '/cache-stats'
     | '/clients'
     | '/conditional-forwarding'
+    | '/ddns'
     | '/disable'
     | '/domains'
     | '/groups'
@@ -267,7 +268,6 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/tools'
-    | '/tsig-keys'
     | '/ui-components'
     | '/zones'
     | '/clients/$clientIp/stats'
@@ -281,6 +281,7 @@ export interface FileRouteTypes {
     | '/cache-stats'
     | '/clients'
     | '/conditional-forwarding'
+    | '/ddns'
     | '/disable'
     | '/domains'
     | '/groups'
@@ -294,7 +295,6 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/tools'
-    | '/tsig-keys'
     | '/ui-components'
     | '/zones'
     | '/clients/$clientIp/stats'
@@ -308,6 +308,7 @@ export interface FileRouteTypes {
     | '/cache-stats'
     | '/clients'
     | '/conditional-forwarding'
+    | '/ddns'
     | '/disable'
     | '/domains'
     | '/groups'
@@ -321,7 +322,6 @@ export interface FileRouteTypes {
     | '/settings'
     | '/setup'
     | '/tools'
-    | '/tsig-keys'
     | '/ui-components'
     | '/zones'
     | '/clients/$clientIp/stats'
@@ -336,6 +336,7 @@ export interface RootRouteChildren {
   CacheStatsRoute: typeof CacheStatsRoute
   ClientsRoute: typeof ClientsRouteWithChildren
   ConditionalForwardingRoute: typeof ConditionalForwardingRoute
+  DdnsRoute: typeof DdnsRoute
   DisableRoute: typeof DisableRoute
   DomainsRoute: typeof DomainsRoute
   GroupsRoute: typeof GroupsRoute
@@ -349,7 +350,6 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   SetupRoute: typeof SetupRoute
   ToolsRoute: typeof ToolsRoute
-  TsigKeysRoute: typeof TsigKeysRoute
   UiComponentsRoute: typeof UiComponentsRoute
   ZonesRoute: typeof ZonesRoute
 }
@@ -368,13 +368,6 @@ declare module '@tanstack/react-router' {
       path: '/ui-components'
       fullPath: '/ui-components'
       preLoaderRoute: typeof UiComponentsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/tsig-keys': {
-      id: '/tsig-keys'
-      path: '/tsig-keys'
-      fullPath: '/tsig-keys'
-      preLoaderRoute: typeof TsigKeysRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/tools': {
@@ -468,6 +461,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DisableRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/ddns': {
+      id: '/ddns'
+      path: '/ddns'
+      fullPath: '/ddns'
+      preLoaderRoute: typeof DdnsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/conditional-forwarding': {
       id: '/conditional-forwarding'
       path: '/conditional-forwarding'
@@ -554,6 +554,7 @@ const rootRouteChildren: RootRouteChildren = {
   CacheStatsRoute: CacheStatsRoute,
   ClientsRoute: ClientsRouteWithChildren,
   ConditionalForwardingRoute: ConditionalForwardingRoute,
+  DdnsRoute: DdnsRoute,
   DisableRoute: DisableRoute,
   DomainsRoute: DomainsRoute,
   GroupsRoute: GroupsRoute,
@@ -567,7 +568,6 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   SetupRoute: SetupRoute,
   ToolsRoute: ToolsRoute,
-  TsigKeysRoute: TsigKeysRoute,
   UiComponentsRoute: UiComponentsRoute,
   ZonesRoute: ZonesRoute,
 }
