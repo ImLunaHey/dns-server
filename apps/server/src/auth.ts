@@ -11,7 +11,7 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24 * 7, // 7 days
     updateAge: 60 * 60 * 24, // 1 day
   },
-  baseURL: 'http://localhost:3001',
+  baseURL: process.env.BETTER_AUTH_BASE_URL || process.env.SERVER_URL || 'http://localhost:3001',
   basePath: '/api/auth',
   secret: process.env.BETTER_AUTH_SECRET || 'change-me-in-production',
   trustedOrigins: (request: Request) => {
@@ -23,7 +23,7 @@ export const auth = betterAuth({
     }
 
     // In production, use explicit trusted origins from env or default
-    const allowedOrigins = process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(',') || ['http://localhost:3000'];
+    const allowedOrigins = process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(',') || process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000'];
     return allowedOrigins.includes(origin) ? [origin] : allowedOrigins;
   },
   advanced: {

@@ -224,6 +224,104 @@ if [[ ! "$BIND_IP" =~ ^(0\.0\.0\.0|127\.0\.0\.1|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,
   echo -e "${YELLOW}Warning: IP address format may be invalid, but continuing...${NC}"
 fi
 
+# Determine server and client URLs based on bind IP
+if [ "$BIND_IP" = "0.0.0.0" ]; then
+  # If binding to all interfaces, use localhost for URLs (or detect primary IP)
+  # Try to detect the primary network IP
+  if command -v ip &> /dev/null; then
+    PRIMARY_IP=$(ip -4 addr show | grep -E "inet " | grep -v "127.0.0.1" | head -1 | awk '{print $2}' | cut -d'/' -f1 || echo "")
+  elif command -v ifconfig &> /dev/null; then
+    PRIMARY_IP=$(ifconfig | grep -E "inet " | grep -v "127.0.0.1" | head -1 | awk '{print $2}' || echo "")
+  fi
+  
+  if [ -n "$PRIMARY_IP" ]; then
+    SERVER_URL="http://$PRIMARY_IP:3001"
+    CLIENT_URL="http://$PRIMARY_IP:3000"
+    echo -e "${GREEN}Detected primary IP: $PRIMARY_IP${NC}"
+    echo -e "${GREEN}  Server URL: $SERVER_URL${NC}"
+    echo -e "${GREEN}  Client URL: $CLIENT_URL${NC}"
+  else
+    SERVER_URL="http://localhost:3001"
+    CLIENT_URL="http://localhost:3000"
+    echo -e "${YELLOW}Could not detect primary IP, using localhost${NC}"
+  fi
+elif [ "$BIND_IP" = "127.0.0.1" ]; then
+  SERVER_URL="http://localhost:3001"
+  CLIENT_URL="http://localhost:3000"
+else
+  # Use the specific bind IP
+  SERVER_URL="http://$BIND_IP:3001"
+  CLIENT_URL="http://$BIND_IP:3000"
+fi
+
+# Caddy reverse proxy is required
+echo ""
+echo -e "${GREEN}Reverse Proxy Configuration${NC}"
+echo "============================="
+echo ""
+echo -e "${GREEN}Caddy will be used as a reverse proxy to serve both client and server.${NC}"
+echo -e "${YELLOW}This provides:${NC}"
+echo "  - Single URL for both client and API"
+echo "  - Automatic HTTPS (if using a domain)"
+echo "  - Simplified access"
+echo ""
+echo -e "${YELLOW}Do you want to use a domain name?${NC}"
+echo -e "${YELLOW}  - Yes: Enter a domain (e.g., dns.example.com) for automatic HTTPS${NC}"
+echo -e "${YELLOW}  - No: Will use the bind IP address ($BIND_IP) for HTTP only${NC}"
+echo ""
+read -p "Use domain? (y/n, default: n): " use_domain
+USE_DOMAIN=false
+if [[ "$use_domain" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+  USE_DOMAIN=true
+  echo ""
+  echo -e "${YELLOW}Enter your domain name:${NC}"
+  echo -e "${YELLOW}  Example: dns.example.com${NC}"
+  echo ""
+  read -p "Domain: " caddy_domain
+  if [ -z "$caddy_domain" ]; then
+    echo -e "${YELLOW}No domain provided, falling back to bind IP: $BIND_IP${NC}"
+    CADDY_DOMAIN="$BIND_IP"
+    USE_DOMAIN=false
+  else
+    CADDY_DOMAIN="$caddy_domain"
+  fi
+else
+  CADDY_DOMAIN="$BIND_IP"
+fi
+
+# Set URLs based on whether we're using a domain or IP
+if [ "$USE_DOMAIN" = true ] && [[ ! "$CADDY_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  # It's a domain - use HTTPS
+  FINAL_SERVER_URL="https://$CADDY_DOMAIN"
+  FINAL_CLIENT_URL="https://$CADDY_DOMAIN"
+else
+  # It's an IP address - use HTTP
+  FINAL_SERVER_URL="http://$CADDY_DOMAIN"
+  FINAL_CLIENT_URL="http://$CADDY_DOMAIN"
+fi
+
+SERVER_URL="$FINAL_SERVER_URL"
+CLIENT_URL="$FINAL_CLIENT_URL"
+
+echo ""
+echo -e "${GREEN}Caddy Configuration:${NC}"
+echo -e "${GREEN}  Will serve on: $CADDY_DOMAIN${NC}"
+echo -e "${GREEN}  Client and API accessible at: $FINAL_CLIENT_URL${NC}"
+if [ "$USE_DOMAIN" = true ] && [[ ! "$CADDY_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo -e "${GREEN}  HTTPS will be automatically enabled${NC}"
+fi
+USE_CADDY=true
+
+echo ""
+echo -e "${GREEN}Web Interface URLs${NC}"
+echo "=================="
+echo -e "${GREEN}  Server API: $FINAL_SERVER_URL${NC}"
+echo -e "${GREEN}  Client Dashboard: $FINAL_CLIENT_URL${NC}"
+echo -e "${GREEN}  (Both served via Caddy reverse proxy)${NC}"
+echo ""
+echo -e "${YELLOW}If you need to change these URLs, edit $INSTALL_PATH/apps/server/.env after installation${NC}"
+echo ""
+
 echo ""
 echo -e "${GREEN}Generating .env file...${NC}"
 ENV_FILE="$INSTALL_PATH/apps/server/.env"
@@ -249,11 +347,15 @@ NODE_ENV=production
 # Optional: Log Level (debug, info, warn, error)
 # LOG_LEVEL=info
 
-# Optional: CORS Origins (comma-separated)
-# CORS_ORIGINS=http://localhost:3000
+# CORS Origins (comma-separated) - URLs allowed to access the API
+CORS_ORIGINS=$FINAL_CLIENT_URL
 
-# Optional: Better Auth Trusted Origins (comma-separated)
-# BETTER_AUTH_TRUSTED_ORIGINS=http://localhost:3000
+# Better Auth Trusted Origins (comma-separated) - URLs allowed for authentication
+BETTER_AUTH_TRUSTED_ORIGINS=$FINAL_CLIENT_URL
+
+# Server URL - Base URL for the API server (used by better-auth)
+SERVER_URL=$FINAL_SERVER_URL
+BETTER_AUTH_BASE_URL=$FINAL_SERVER_URL
 EOF
   echo -e "${GREEN}✓ Created .env file${NC}"
 else
@@ -282,6 +384,36 @@ else
     echo "DNS_BIND_ADDRESS=$BIND_IP" >> "$ENV_FILE"
     echo -e "${GREEN}✓ Added DNS_BIND_ADDRESS=$BIND_IP${NC}"
   fi
+  
+  # Update CORS_ORIGINS
+  if grep -q "^CORS_ORIGINS=" "$ENV_FILE"; then
+    sed -i "s|^CORS_ORIGINS=.*|CORS_ORIGINS=$FINAL_CLIENT_URL|" "$ENV_FILE"
+  else
+    echo "CORS_ORIGINS=$FINAL_CLIENT_URL" >> "$ENV_FILE"
+  fi
+  echo -e "${GREEN}✓ Updated CORS_ORIGINS to $FINAL_CLIENT_URL${NC}"
+  
+  # Update BETTER_AUTH_TRUSTED_ORIGINS
+  if grep -q "^BETTER_AUTH_TRUSTED_ORIGINS=" "$ENV_FILE"; then
+    sed -i "s|^BETTER_AUTH_TRUSTED_ORIGINS=.*|BETTER_AUTH_TRUSTED_ORIGINS=$FINAL_CLIENT_URL|" "$ENV_FILE"
+  else
+    echo "BETTER_AUTH_TRUSTED_ORIGINS=$FINAL_CLIENT_URL" >> "$ENV_FILE"
+  fi
+  echo -e "${GREEN}✓ Updated BETTER_AUTH_TRUSTED_ORIGINS to $FINAL_CLIENT_URL${NC}"
+  
+  # Update SERVER_URL and BETTER_AUTH_BASE_URL
+  if grep -q "^SERVER_URL=" "$ENV_FILE"; then
+    sed -i "s|^SERVER_URL=.*|SERVER_URL=$FINAL_SERVER_URL|" "$ENV_FILE"
+  else
+    echo "SERVER_URL=$FINAL_SERVER_URL" >> "$ENV_FILE"
+  fi
+  
+  if grep -q "^BETTER_AUTH_BASE_URL=" "$ENV_FILE"; then
+    sed -i "s|^BETTER_AUTH_BASE_URL=.*|BETTER_AUTH_BASE_URL=$FINAL_SERVER_URL|" "$ENV_FILE"
+  else
+    echo "BETTER_AUTH_BASE_URL=$FINAL_SERVER_URL" >> "$ENV_FILE"
+  fi
+  echo -e "${GREEN}✓ Updated SERVER_URL and BETTER_AUTH_BASE_URL to $FINAL_SERVER_URL${NC}"
 fi
 
 # Ensure NODE_ENV is set
@@ -445,6 +577,11 @@ fi
 # Build the project
 echo -e "${GREEN}Building project...${NC}"
 cd "$INSTALL_PATH"
+
+# Set environment variables for client build with final URLs
+export VITE_API_URL="$FINAL_SERVER_URL"
+export VITE_AUTH_BASE_URL="$FINAL_SERVER_URL"
+
 pnpm install
 pnpm run build
 
@@ -599,6 +736,97 @@ if [ -f "$CLIENT_SERVICE_FILE" ]; then
   rm "$TEMP_CLIENT_SERVICE"
 fi
 
+# Install and configure Caddy (required)
+echo ""
+echo -e "${GREEN}Installing and configuring Caddy...${NC}"
+  
+  # Check if Caddy is installed
+  if ! command -v caddy &> /dev/null; then
+    echo -e "${YELLOW}Caddy not found. Installing Caddy...${NC}"
+    
+    # Install Caddy (Ubuntu/Debian)
+    if command -v apt-get &> /dev/null; then
+      sudo apt-get update
+      sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https
+      curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+      curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+      sudo apt-get update
+      sudo apt-get install -y caddy
+    # Install Caddy (RHEL/CentOS/Fedora)
+    elif command -v dnf &> /dev/null || command -v yum &> /dev/null; then
+      if command -v dnf &> /dev/null; then
+        sudo dnf install -y 'dnf-command(copr)'
+        sudo dnf copr enable -y @caddy/caddy
+        sudo dnf install -y caddy
+      else
+        sudo yum install -y yum-plugin-copr
+        sudo yum copr enable -y @caddy/caddy
+        sudo yum install -y caddy
+      fi
+    else
+      echo -e "${YELLOW}Could not auto-install Caddy. Please install it manually:${NC}"
+      echo "  Visit: https://caddyserver.com/docs/install"
+      read -p "Press Enter after installing Caddy, or Ctrl+C to cancel..."
+    fi
+  fi
+  
+  # Create Caddyfile
+  CADDYFILE="$INSTALL_PATH/systemd/Caddyfile"
+  if [ -f "$CADDYFILE" ]; then
+    # Update Caddyfile with domain (replace {$DOMAIN} placeholder)
+    sed "s/{\\\$DOMAIN:localhost}/$CADDY_DOMAIN/g" "$CADDYFILE" | \
+      sed "s/{\\\$DOMAIN}/$CADDY_DOMAIN/g" > /etc/caddy/Caddyfile
+    echo -e "${GREEN}✓ Created Caddyfile at /etc/caddy/Caddyfile${NC}"
+  else
+    # Create Caddyfile from scratch
+    cat > /etc/caddy/Caddyfile <<EOF
+# DNS Server Caddy Configuration
+# Generated by install script on $(date)
+
+$CADDY_DOMAIN {
+  # Proxy API requests to the server (port 3001)
+  reverse_proxy /api/* localhost:3001 {
+    header_up Host {host}
+    header_up X-Real-IP {remote}
+    header_up X-Forwarded-For {remote}
+    header_up X-Forwarded-Proto {scheme}
+  }
+  
+  # Proxy all other requests to the client (port 3000)
+  reverse_proxy /* localhost:3000 {
+    header_up Host {host}
+    header_up X-Real-IP {remote}
+    header_up X-Forwarded-For {remote}
+    header_up X-Forwarded-Proto {scheme}
+  }
+  
+  # Security headers
+  header {
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    X-XSS-Protection "1; mode=block"
+    Referrer-Policy "strict-origin-when-cross-origin"
+  }
+  
+  # Enable compression
+  encode gzip zstd
+}
+EOF
+    echo -e "${GREEN}✓ Created Caddyfile at /etc/caddy/Caddyfile${NC}"
+  fi
+  
+# Enable and start Caddy
+systemctl enable caddy
+systemctl restart caddy
+echo -e "${GREEN}✓ Caddy configured and started${NC}"
+
+# Note about ports
+echo -e "${YELLOW}Note: Caddy will handle ports 80/443.${NC}"
+if [[ ! "$CADDY_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo -e "${YELLOW}      Make sure ports 80 and 443 are open for automatic HTTPS.${NC}"
+  echo -e "${YELLOW}      Ensure your domain's DNS points to this server's IP address.${NC}"
+fi
+
 # Reload systemd
 echo -e "${GREEN}Reloading systemd...${NC}"
 systemctl daemon-reload
@@ -663,15 +891,24 @@ if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
   echo "  Check client status: sudo systemctl status dns-client.service"
   echo "  View server logs:    sudo journalctl -u dns-server.service -f"
   echo "  View client logs:     sudo journalctl -u dns-client.service -f"
-  echo "  Restart all:          sudo systemctl restart dns-server.service dns-client.service"
+  echo "  Restart all:          sudo systemctl restart dns-server.service dns-client.service caddy"
 else
   echo -e "${YELLOW}Services installed but not started. Start them with:${NC}"
   echo "  sudo systemctl start dns-server.service"
   if [ -f "$SYSTEMD_CLIENT_PATH" ]; then
     echo "  sudo systemctl start dns-client.service"
   fi
+  echo "  sudo systemctl start caddy"
 fi
 
 echo ""
 echo -e "${GREEN}Installation complete!${NC}"
+echo ""
+echo -e "${GREEN}Access your DNS server dashboard at:${NC}"
+echo -e "${GREEN}  $FINAL_CLIENT_URL${NC}"
+echo ""
+if [[ ! "$CADDY_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo -e "${YELLOW}Note: Caddy will automatically obtain an SSL certificate for your domain.${NC}"
+  echo -e "${YELLOW}      Make sure your domain's DNS points to this server's IP address.${NC}"
+fi
 

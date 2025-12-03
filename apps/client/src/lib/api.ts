@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-const API_URL = ""; // Use relative URL since we're proxying through Vite
+// Use environment variable for API URL in production, or relative URL in dev
+const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "" : "http://localhost:3001");
 
 // Zod IP validators return validated strings
 type IPv4 = z.infer<ReturnType<typeof z.ipv4>>;

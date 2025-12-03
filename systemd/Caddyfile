@@ -1,0 +1,34 @@
+# DNS Server Caddy Configuration
+# This file configures Caddy as a reverse proxy for the DNS server and client
+# The install script will replace {$DOMAIN} with the actual domain/IP
+# Caddy will automatically bind to the domain/IP specified
+
+{$DOMAIN:localhost} {
+  # Proxy API requests to the server (port 3001)
+  reverse_proxy /api/* localhost:3001 {
+    header_up Host {host}
+    header_up X-Real-IP {remote}
+    header_up X-Forwarded-For {remote}
+    header_up X-Forwarded-Proto {scheme}
+  }
+  
+  # Proxy all other requests to the client (port 3000)
+  reverse_proxy /* localhost:3000 {
+    header_up Host {host}
+    header_up X-Real-IP {remote}
+    header_up X-Forwarded-For {remote}
+    header_up X-Forwarded-Proto {scheme}
+  }
+  
+  # Security headers
+  header {
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    X-XSS-Protection "1; mode=block"
+    Referrer-Policy "strict-origin-when-cross-origin"
+  }
+  
+  # Enable compression
+  encode gzip zstd
+}
+
