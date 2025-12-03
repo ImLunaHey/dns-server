@@ -11,9 +11,8 @@ Group=root
 WorkingDirectory=/opt/dns-server/apps/server
 Environment="NODE_ENV=production"
 Environment="PATH=/usr/bin:/usr/local/bin"
-# Optional: Set custom environment variables
-# Environment="DNS_BIND_ADDRESS=0.0.0.0"
-# Environment="LOG_LEVEL=info"
+# Load environment variables from .env file
+EnvironmentFile=/opt/dns-server/apps/server/.env
 
 # Run the server directly with node (no pnpm needed for runtime)
 # The install script will replace /usr/bin/node with the actual node path
