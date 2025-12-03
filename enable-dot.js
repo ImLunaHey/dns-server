@@ -12,7 +12,7 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
 
-const serverDir = join(dirname(fileURLToPath(import.meta.url)), "server");
+const serverDir = join(dirname(fileURLToPath(import.meta.url)), "apps", "server");
 const certPath = join(serverDir, "certs", "dot.crt");
 const keyPath = join(serverDir, "certs", "dot.key");
 

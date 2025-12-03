@@ -2,8 +2,8 @@ import * as crypto from 'crypto';
 import { logger } from './logger.js';
 
 // DNSSEC record types
-const RRSIG = 46;
-const DNSKEY = 48;
+const _RRSIG = 46;
+const _DNSKEY = 48;
 
 interface DNSKEYRecord {
   flags: number;
@@ -69,7 +69,7 @@ export function calculateKeyTag(dnskey: DNSKEYRecord): number {
 /**
  * Build canonical RRset for signing (RFC 4034)
  */
-function buildCanonicalRRset(records: ResourceRecord[], response: Buffer): Buffer {
+function buildCanonicalRRset(records: ResourceRecord[], _response: Buffer): Buffer {
   // Sort records by type and data
   const sorted = [...records].sort((a, b) => {
     if (a.type !== b.type) return a.type - b.type;

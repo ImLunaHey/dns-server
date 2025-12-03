@@ -693,7 +693,7 @@ export function Settings() {
                           return true;
                         },
                       })}
-                      placeholder="server/certs/dot.crt"
+                      placeholder="apps/server/certs/dot.crt"
                       className={cn(
                         "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
                         "focus:outline-none focus:ring-2 focus:ring-blue-500",
@@ -720,7 +720,7 @@ export function Settings() {
                           return true;
                         },
                       })}
-                      placeholder="server/certs/dot.key"
+                      placeholder="apps/server/certs/dot.key"
                       className={cn(
                         "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
                         "focus:outline-none focus:ring-2 focus:ring-blue-500",
@@ -829,7 +829,7 @@ export function Settings() {
                     <input
                       type="text"
                       {...register("doqCertPath")}
-                      placeholder="server/certs/doq.crt (or reuse DoT cert)"
+                      placeholder="apps/server/certs/doq.crt (or reuse DoT cert)"
                       className={cn(
                         "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
                         "focus:outline-none focus:ring-2 focus:ring-blue-500",
@@ -849,7 +849,7 @@ export function Settings() {
                     <input
                       type="text"
                       {...register("doqKeyPath")}
-                      placeholder="server/certs/doq.key (or reuse DoT key)"
+                      placeholder="apps/server/certs/doq.key (or reuse DoT key)"
                       className={cn(
                         "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
                         "focus:outline-none focus:ring-2 focus:ring-blue-500",

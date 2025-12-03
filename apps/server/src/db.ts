@@ -909,7 +909,7 @@ export const dbQueries = {
     return result.changes;
   },
 
-  archiveOldQueries(daysToKeep: number = 7, compress: boolean = true): number {
+  archiveOldQueries(daysToKeep: number = 7, _compress: boolean = true): number {
     const cutoffTime = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
 
     // Get old queries
@@ -930,7 +930,7 @@ export const dbQueries = {
     }
 
     // Store archived queries (in a simple JSON format, could be compressed)
-    const archiveData = {
+    const _archiveData = {
       archivedAt: Date.now(),
       count: oldQueries.length,
       queries: oldQueries,

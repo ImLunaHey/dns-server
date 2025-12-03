@@ -22,6 +22,9 @@ server/certs/
 *.pem
 *.csr
 
+# Turborepo
+.turbo
+
 # Misc
 .DS_Store
 .env

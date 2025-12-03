@@ -1,8 +1,7 @@
 import dgram from 'dgram';
 import net from 'net';
 import tls from 'tls';
-import { join, resolve, dirname, basename } from 'path';
-import { fileURLToPath } from 'url';
+import { resolve, basename } from 'path';
 import {
   dbQueries,
   dbLocalDNS,
@@ -27,7 +26,7 @@ import {
   dbUpstreamMetrics,
 } from './db.js';
 import { logger } from './logger.js';
-import { validateDNSSEC, validateChainOfTrust } from './dnssec-validator.js';
+import { validateDNSSEC } from './dnssec-validator.js';
 import { signRRset, generateDNSKEYRecord } from './dnssec-signer.js';
 import { handleDNSUpdate } from './ddns-handler.js';
 import { handleAXFR, handleIXFR } from './zone-transfer-handler.js';
@@ -97,7 +96,7 @@ export class DNSServer {
   private rateLimitWindowMs: number = 60000; // 1 minute
   private cache: Map<string, CachedDNSResponse> = new Map();
   private cacheEnabled: boolean = true;
-  private cacheTTL: number = 300; // 5 minutes default
+  private _cacheTTL: number = 300; // 5 minutes default
   private serveStaleEnabled: boolean = false;
   private serveStaleMaxAge: number = 604800; // 7 days in seconds
   private prefetchEnabled: boolean = false;
@@ -791,7 +790,7 @@ export class DNSServer {
     try {
       if (msg.length < 12) return null;
 
-      const id = msg.readUInt16BE(0);
+      const _id = msg.readUInt16BE(0);
       const flags = msg.readUInt16BE(2);
 
       // Check if it's a query (QR bit = 0)
@@ -856,7 +855,7 @@ export class DNSServer {
         }
       }
 
-      return { id, domain, type, wantsDNSSEC };
+      return { id: _id, domain, type, wantsDNSSEC };
     } catch (error) {
       logger.error('Error parsing DNS query', {
         error: error instanceof Error ? error : new Error(String(error)),
@@ -2350,7 +2349,7 @@ export class DNSServer {
       throw new Error('Failed to parse DNS query');
     }
 
-    const { id, domain, type, wantsDNSSEC } = parsed;
+    const { id: _id, domain, type, wantsDNSSEC } = parsed;
 
     // Zone transfers (AXFR/IXFR) are handled in TCP socket handler, not here
     // Check rate limiting first

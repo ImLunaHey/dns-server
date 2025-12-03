@@ -24,7 +24,6 @@ import {
   dbManualBlocklist,
   dbConditionalForwarding,
   dbClientUpstreamDNS,
-  dbRateLimits,
   dbScheduledTasks,
   dbBlockPageSettings,
   dbZones,
@@ -111,7 +110,7 @@ function addEDNS0(query: Buffer, dnssecOK: boolean = false, udpPayloadSize: numb
         }
         // Skip this record
         offset += 2; // Name
-        const rrType = query.readUInt16BE(offset);
+        const _rrType = query.readUInt16BE(offset);
         offset += 2; // Type
         offset += 2; // Class
         offset += 4; // TTL
@@ -255,7 +254,7 @@ function parseResourceRecord(
   if (currentOffset + 10 > response.length) return null;
 
   const rrType = response.readUInt16BE(currentOffset);
-  const rrClass = response.readUInt16BE(currentOffset + 2);
+  const _rrClass = response.readUInt16BE(currentOffset + 2);
   const ttl = response.readUInt32BE(currentOffset + 4);
   const dataLength = response.readUInt16BE(currentOffset + 8);
   currentOffset += 10;
@@ -1219,7 +1218,7 @@ app.post('/api/adlists/update', requireAuth, async (c) => {
   try {
     const updateId = dbBlocklistUpdates.startUpdate();
     const adlists = dbAdlists.getAll().filter((a) => a.enabled === 1);
-    const urls = adlists.map((a) => a.url);
+    const _urls = adlists.map((a) => a.url);
 
     // Reload blocklists in background
     dnsServer
@@ -1410,7 +1409,7 @@ app.get('/api/ddns/update', async (c) => {
   // Extract client IP - prefer explicit, then headers, then connection IP
   const detectedIp = forwardedFor?.split(',')[0]?.trim() || realIp?.trim() || cfConnectingIp?.trim();
   const ip = explicitIp || detectedIp;
-  const ipv6 = explicitIpv6;
+  const _ipv6 = explicitIpv6;
 
   // Find the zone for this domain
   const zone = dbZones.findZoneForDomain(domain);
@@ -2109,7 +2108,7 @@ app.post('/api/scheduled-tasks/:id/run', requireAuth, async (c) => {
       logger.info('Manually running blocklist update task...');
       const updateId = dbBlocklistUpdates.startUpdate();
       const adlists = dbAdlists.getAll().filter((a) => a.enabled === 1);
-      const urls = adlists.map((a) => a.url);
+      const _urls = adlists.map((a) => a.url);
 
       // Run in background but don't wait for completion
       dnsServer
@@ -2809,7 +2808,7 @@ async function runScheduledTasks() {
         logger.info('Running scheduled blocklist update...');
         const updateId = dbBlocklistUpdates.startUpdate();
         const adlists = dbAdlists.getAll().filter((a) => a.enabled === 1);
-        const urls = adlists.map((a) => a.url);
+        const _urls = adlists.map((a) => a.url);
 
         dnsServer
           .reloadBlocklist()

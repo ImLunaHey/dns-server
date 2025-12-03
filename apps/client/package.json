@@ -1,5 +1,5 @@
 {
-  "name": "dns-client",
+  "name": "@dns-server/client",
   "private": true,
   "version": "0.0.0",
   "type": "module",

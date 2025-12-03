@@ -10,7 +10,7 @@ import { mkdirSync } from 'fs';
 import { join } from 'path';
 
 const hostname = process.argv[2] || 'localhost';
-const certDir = join(process.cwd(), 'server', 'certs');
+const certDir = join(process.cwd(), 'apps', 'server', 'certs');
 
 console.log('Generating self-signed TLS certificates for DoT...');
 console.log(`Hostname: ${hostname}`);

@@ -4,22 +4,22 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 
 # Copy server files
-COPY server/package.json server/pnpm-lock.yaml ./server/
+COPY apps/server/package.json apps/server/pnpm-lock.yaml ./server/
 RUN cd server && corepack enable && pnpm install --frozen-lockfile
 
-COPY server/tsconfig.json ./server/
-COPY server/src ./server/src
+COPY apps/server/tsconfig.json ./server/
+COPY apps/server/src ./server/src
 
 # Build server
 RUN cd server && pnpm run build
 
 # Copy client files
-COPY client/package.json client/pnpm-lock.yaml ./client/
+COPY apps/client/package.json apps/client/pnpm-lock.yaml ./client/
 RUN cd client && corepack enable && pnpm install --frozen-lockfile
 
-COPY client/tsconfig.json client/vite.config.ts client/tailwind.config.js client/postcss.config.js ./client/
-COPY client/index.html ./client/
-COPY client/src ./client/src
+COPY apps/client/tsconfig.json apps/client/vite.config.ts apps/client/tailwind.config.js apps/client/postcss.config.js ./client/
+COPY apps/client/index.html ./client/
+COPY apps/client/src ./client/src
 
 # Build client
 RUN cd client && pnpm run build

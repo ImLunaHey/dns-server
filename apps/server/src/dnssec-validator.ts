@@ -59,7 +59,8 @@ interface ResourceRecord {
   offset: number;
 }
 
-interface DNSResponse {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface _DNSResponse {
   answers: ResourceRecord[];
   authority: ResourceRecord[];
   additional: ResourceRecord[];
@@ -127,7 +128,7 @@ function parseResourceRecord(response: Buffer, offset: number): ResourceRecord |
   }
 
   const type = response.readUInt16BE(currentOffset);
-  const klass = response.readUInt16BE(currentOffset + 2);
+  const _klass = response.readUInt16BE(currentOffset + 2);
   const ttl = response.readUInt32BE(currentOffset + 4);
   const dataLength = response.readUInt16BE(currentOffset + 8);
   currentOffset += 10;
@@ -205,7 +206,7 @@ function parseDNSKEY(data: Buffer): DNSKEYRecord | null {
 /**
  * Parse NSEC record
  */
-function parseNSEC(data: Buffer, response: Buffer, dataStartOffset: number): NSECRecord | null {
+function parseNSEC(data: Buffer, _response: Buffer, _dataStartOffset: number): NSECRecord | null {
   try {
     if (data.length < 2) return null;
 
@@ -390,7 +391,7 @@ function computeNSEC3Hash(domain: string, salt: Buffer, iterations: number, hash
  * Check if a domain name is covered by NSEC3 record
  * NSEC3 uses hashed domain names, so we need to hash the queried domain and check if it's covered
  */
-function nsec3CoversDomain(nsec3: NSEC3Record, queriedDomain: string, nsec3OwnerName: string, zoneName: string): boolean {
+function nsec3CoversDomain(nsec3: NSEC3Record, queriedDomain: string, nsec3OwnerName: string, _zoneName: string): boolean {
   try {
     // Compute hash of queried domain
     const queriedHash = computeNSEC3Hash(queriedDomain, nsec3.salt, nsec3.iterations, nsec3.hashAlgorithm);
@@ -627,7 +628,7 @@ function canonicalizeName(name: string): Buffer {
 /**
  * Build canonical form of RRset for signing
  */
-function buildCanonicalRRset(records: ResourceRecord[], rrsig: RRSIGRecord, response: Buffer): Buffer {
+function buildCanonicalRRset(records: ResourceRecord[], rrsig: RRSIGRecord, _response: Buffer): Buffer {
   const parts: Buffer[] = [];
 
   // Sort records by canonical wire format
@@ -871,8 +872,8 @@ function ecdsaKeyToPEM(publicKey: Buffer, curve: 'prime256v1' | 'secp384r1'): st
     throw new Error(`Invalid ECDSA public key length for ${curve}`);
   }
 
-  const x = publicKey.slice(1, 1 + keySize);
-  const y = publicKey.slice(1 + keySize);
+  const _x = publicKey.slice(1, 1 + keySize);
+  const _y = publicKey.slice(1 + keySize);
 
   // ASN.1 structure for ECDSA public key
   // SEQUENCE {

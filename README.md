@@ -40,42 +40,57 @@ A custom DNS server built with TypeScript that blocks ads using popular blocklis
 ## Prerequisites
 
 - Node.js 18+ (Node.js 25+ required for DoQ support)
+- pnpm 9+ (package manager)
 - Sudo/admin access (required for binding to port 53)
 
 ## Installation
 
-### 1. Install Server Dependencies
+This is a monorepo managed with Turborepo and pnpm workspaces. Install all dependencies from the root:
 
 ```bash
-cd server
-npm install
-```
-
-### 2. Install Client Dependencies
-
-```bash
-cd client
-npm install
+# Install all dependencies for client and server
+pnpm install
 ```
 
 ## Usage
 
-### Running the Server (requires sudo)
+### Running Both Client and Server
 
-The DNS server needs to bind to port 53, which requires elevated privileges:
+Run both the client and server in development mode:
 
 ```bash
-cd server
-sudo npm run dev
+# From the root directory
+pnpm run dev
 ```
 
-### Running the Client
+This will start both:
+- **Server** on ports 53 (UDP/TCP), 853 (DoT/DoQ), and 3001 (DoH/API)
+- **Client** on port 3000 (dashboard)
 
-In a separate terminal:
+### Running Individual Packages
+
+You can also run packages individually:
+
+**Server (requires sudo for port 53):**
 
 ```bash
-cd client
-npm run dev
+# From root
+sudo pnpm --filter @dns-server/server dev
+
+# Or from server directory
+cd apps/server
+sudo pnpm run dev
+```
+
+**Client:**
+
+```bash
+# From root
+pnpm --filter @dns-server/client dev
+
+# Or from client directory
+cd apps/client
+pnpm run dev
 ```
 
 The dashboard will be available at `http://localhost:3000`
@@ -103,8 +118,8 @@ node generate-dot-certs.js localhost
 2. Configure in Settings page:
 
    - Enable DoT: `true`
-   - Certificate Path: `server/certs/dot.crt`
-   - Private Key Path: `server/certs/dot.key`
+   - Certificate Path: `apps/server/certs/dot.crt`
+   - Private Key Path: `apps/server/certs/dot.key`
    - Port: `853` (default)
 
 3. Test DoT:
@@ -301,36 +316,62 @@ Point your router's DNS settings to the IP address of the machine running this D
 
 ## Development
 
-### Server Development
+This monorepo uses [Turborepo](https://turbo.build/) for fast, cached builds and task orchestration.
+
+### Available Scripts
+
+From the root directory:
+
+- `pnpm run dev` - Start both client and server in development mode
+- `pnpm run build` - Build all packages
+- `pnpm run typecheck` - Type check all packages
+- `pnpm run test` - Run tests in watch mode for all packages
+- `pnpm run test:run` - Run tests once for all packages
+- `pnpm run test:coverage` - Run tests with coverage for all packages
+- `pnpm run clean` - Clean all build artifacts and node_modules
+
+### Running Individual Packages
+
+**Server Development:**
 
 ```bash
-cd server
-npm run dev  # Auto-reloads on changes
+# From root
+sudo pnpm --filter @dns-server/server dev
+
+# Or from server directory
+cd apps/server
+sudo pnpm run dev
 ```
 
-### Client Development
+**Client Development:**
 
 ```bash
-cd client
-npm run dev  # Hot module replacement
+# From root
+pnpm --filter @dns-server/client dev
+
+# Or from client directory
+cd apps/client
+pnpm run dev
 ```
 
 ### Building for Production
 
-**Server:**
+**Build all packages:**
 
 ```bash
-cd server
-npm run build
-sudo node dist/index.js
+pnpm run build
 ```
 
-**Client:**
+**Build individual packages:**
 
 ```bash
-cd client
-npm run build
-npm run preview
+# Server
+pnpm --filter @dns-server/server build
+sudo pnpm --filter @dns-server/server start
+
+# Client
+pnpm --filter @dns-server/client build
+pnpm --filter @dns-server/client preview
 ```
 
 ## Troubleshooting

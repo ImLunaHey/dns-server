@@ -2,10 +2,10 @@ import { logger } from './logger.js';
 import { dbZones, dbZoneRecords, dbZoneChanges } from './db.js';
 
 // Zone transfer types
-const AXFR = 252; // Full zone transfer
-const IXFR = 251; // Incremental zone transfer
+const _AXFR = 252; // Full zone transfer
+const _IXFR = 251; // Incremental zone transfer
 
-interface ZoneRecord {
+interface _ZoneRecord {
   name: string;
   type: string;
   ttl: number;
@@ -28,7 +28,7 @@ export function handleAXFR(zoneId: number, queryId: number): Buffer[] {
     const responses: Buffer[] = [];
 
     // Type map for DNS record types
-    const typeMap: Record<string, number> = {
+    const _typeMap: Record<string, number> = {
       A: 1,
       AAAA: 28,
       MX: 15,
@@ -257,7 +257,7 @@ function createZoneTransferRecord(
   type: string,
   ttl: number,
   data: string,
-  zoneDomain: string,
+  _zoneDomain: string,
   priority?: number | null,
 ): Buffer {
   const response = Buffer.alloc(4096);
@@ -277,7 +277,7 @@ function createZoneTransferRecord(
   response.writeUInt16BE(0, offset); // Additional
   offset += 2;
 
-  const nameStart = offset;
+  const _nameStart = offset;
 
   // Domain name (use compression pointer to zone domain if possible)
   const nameParts = name.toLowerCase().split('.');

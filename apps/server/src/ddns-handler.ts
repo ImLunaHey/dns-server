@@ -227,7 +227,7 @@ function verifyTSIG(message: Buffer, tsig: TSIGRecord, secret: string): boolean 
 /**
  * Handle DNS UPDATE request (RFC 2136)
  */
-export function handleDNSUpdate(message: Buffer, clientIp: string): Buffer | null {
+export function handleDNSUpdate(message: Buffer, _clientIp: string): Buffer | null {
   try {
     if (message.length < 12) return null;
 
@@ -265,9 +265,9 @@ export function handleDNSUpdate(message: Buffer, clientIp: string): Buffer | nul
     }
 
     // Parse TSIG from additional section
-    const arCount = message.readUInt16BE(10);
+    const _arCount = message.readUInt16BE(10);
     let tsig: TSIGRecord | null = null;
-    let tsigOffset = offset;
+    let _tsigOffset = offset;
 
     // Skip prerequisite, update, and additional sections to find TSIG
     // For simplicity, we'll search from the end
@@ -307,7 +307,7 @@ export function handleDNSUpdate(message: Buffer, clientIp: string): Buffer | nul
       if (offset + 10 > message.length) break;
       const type = message.readUInt16BE(offset);
       offset += 2;
-      const class_ = message.readUInt16BE(offset);
+      const _class_ = message.readUInt16BE(offset);
       offset += 2;
       const ttl = message.readUInt32BE(offset);
       offset += 4;

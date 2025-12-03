@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   dns-server:
@@ -17,10 +17,10 @@ services:
       - "3001:3001/tcp"
     volumes:
       # Persist database and cache
-      - ./server/dns.db:/app/server/dns.db
-      - ./server/dns-queries.db:/app/server/dns-queries.db
+      - ./apps/server/dns.db:/app/server/dns.db
+      - ./apps/server/dns-queries.db:/app/server/dns-queries.db
       # TLS certificates for DoT/DoQ
-      - ./server/certs:/app/server/certs
+      - ./apps/server/certs:/app/server/certs
       # Optional: mount data directory
       - ./data:/app/data
     environment:
@@ -32,4 +32,3 @@ services:
 networks:
   dns-network:
     driver: bridge
-
