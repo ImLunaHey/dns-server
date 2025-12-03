@@ -2913,6 +2913,23 @@ async function main() {
   });
 }
 
+// Global error handlers to prevent silent crashes
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception - server may be unstable', {
+    error: error instanceof Error ? error : new Error(String(error)),
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+  // Don't exit - try to keep running, but log the error
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled promise rejection', {
+    reason: reason instanceof Error ? reason : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+  });
+  // Don't exit - try to keep running, but log the error
+});
+
 // Only run main() if this file is being executed directly (not imported)
 // Skip in test environment to avoid port conflicts
 // In ES modules, check if this is the main module

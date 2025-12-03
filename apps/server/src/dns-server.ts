@@ -2371,10 +2371,14 @@ export class DNSServer {
       // Check cache first for authoritative queries
       const cached = this.getCachedResponse(domain, type);
       if (cached) {
-        const queryId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        // Update the query ID in cached response to match the current query
+        const queryId = msg.readUInt16BE(0);
+        const cachedResponse = Buffer.from(cached);
+        cachedResponse.writeUInt16BE(queryId, 0);
+        const queryIdStr = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         const responseTime = Date.now() - startTime;
         const query: DNSQuery = {
-          id: queryId,
+          id: queryIdStr,
           domain,
           type: type === 1 ? 'A' : type === 28 ? 'AAAA' : `TYPE${type}`,
           blocked: false,
@@ -2394,7 +2398,7 @@ export class DNSServer {
         });
         recordCacheMetrics('hit', domain, query.type);
         logger.debug('Cached (authoritative)', { domain, type, zone: zone.domain });
-        return cached;
+        return cachedResponse;
       }
       const authResponse = this.handleAuthoritativeQuery(msg, domain, type, zone);
       if (authResponse) {
@@ -2455,7 +2459,10 @@ export class DNSServer {
         // Check cache first for local DNS (in case it was cached from a previous upstream query)
         const cached = this.getCachedResponse(domain, type);
         if (cached) {
-          response = cached;
+          // Update the query ID in cached response to match the current query
+          const queryId = msg.readUInt16BE(0);
+          response = Buffer.from(cached);
+          response.writeUInt16BE(queryId, 0);
           isCached = true;
           logger.debug('Cached (local DNS)', { domain, type });
         } else {
@@ -2468,7 +2475,10 @@ export class DNSServer {
         // Type mismatch, check cache first
         const cached = this.getCachedResponse(domain, type);
         if (cached) {
-          response = cached;
+          // Update the query ID in cached response to match the current query
+          const queryId = msg.readUInt16BE(0);
+          response = Buffer.from(cached);
+          response.writeUInt16BE(queryId, 0);
           isCached = true;
           logger.debug('Cached', { domain, type });
         } else {
@@ -2491,7 +2501,10 @@ export class DNSServer {
             const staleResponse = this.getCachedResponse(domain, type, true);
             if (staleResponse) {
               logger.info('Upstream query failed, serving stale cache', { domain, type });
-              response = staleResponse;
+              // Update the query ID in stale response to match the current query
+              const queryId = msg.readUInt16BE(0);
+              response = Buffer.from(staleResponse);
+              response.writeUInt16BE(queryId, 0);
               isCached = true;
             } else {
               throw error;
@@ -2503,7 +2516,10 @@ export class DNSServer {
       // Check cache first
       const cached = this.getCachedResponse(domain, type);
       if (cached) {
-        response = cached;
+        // Update the query ID in cached response to match the current query
+        const queryId = msg.readUInt16BE(0);
+        response = Buffer.from(cached);
+        response.writeUInt16BE(queryId, 0);
         isCached = true;
         logger.debug('Cached', { domain, type });
       } else {
@@ -2535,7 +2551,10 @@ export class DNSServer {
           const staleResponse = this.getCachedResponse(domain, type, true);
           if (staleResponse) {
             logger.info('Upstream query failed, serving stale cache', { domain, type });
-            response = staleResponse;
+            // Update the query ID in stale response to match the current query
+            const queryId = msg.readUInt16BE(0);
+            response = Buffer.from(staleResponse);
+            response.writeUInt16BE(queryId, 0);
             isCached = true;
           } else {
             throw error;
@@ -2703,17 +2722,38 @@ export class DNSServer {
 
   private async startUDP(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
+      let udpServerStarted = false;
       this.server.on('message', async (msg, rinfo) => {
         try {
           const response = await this.handleDNSQuery(msg, rinfo.address, false);
-          this.server.send(response, rinfo.port, rinfo.address);
+          this.server.send(response, rinfo.port, rinfo.address, (err) => {
+            if (err) {
+              logger.error('Error sending UDP response', {
+                error: err instanceof Error ? err : new Error(String(err)),
+                clientIp: rinfo.address,
+              });
+            }
+          });
         } catch (error) {
           logger.error('Error handling UDP query', {
             error: error instanceof Error ? error : new Error(String(error)),
             clientIp: rinfo.address,
+            stack: error instanceof Error ? error.stack : undefined,
           });
-          const errorResponse = this.createDNSResponse(msg, true);
-          this.server.send(errorResponse, rinfo.port, rinfo.address);
+          try {
+            const errorResponse = this.createDNSResponse(msg, true);
+            this.server.send(errorResponse, rinfo.port, rinfo.address, (err) => {
+              if (err) {
+                logger.error('Error sending UDP error response', {
+                  error: err instanceof Error ? err : new Error(String(err)),
+                });
+              }
+            });
+          } catch (sendError) {
+            logger.error('Failed to send error response', {
+              error: sendError instanceof Error ? sendError : new Error(String(sendError)),
+            });
+          }
         }
       });
 
@@ -2721,10 +2761,19 @@ export class DNSServer {
         logger.error('UDP DNS server error', {
           error: err instanceof Error ? err : new Error(String(err)),
         });
-        reject(err);
+        // Only reject if we haven't started yet (binding phase)
+        // After binding, errors should be logged but not crash the server
+        if (udpServerStarted) {
+          logger.warn('UDP server error after startup - attempting to continue', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        } else {
+          reject(err);
+        }
       });
 
       this.server.bind(this.port, this.bindAddress, () => {
+        udpServerStarted = true;
         logger.info('DNS server (UDP) running', { port: this.port, address: this.bindAddress });
         resolve();
       });
@@ -2737,14 +2786,24 @@ export class DNSServer {
         this.setupTCPSocket(socket);
       });
 
+      let tcpServerStarted = false;
       this.tcpServer.on('error', (err) => {
         logger.error('TCP DNS server error', {
           error: err instanceof Error ? err : new Error(String(err)),
         });
-        reject(err);
+        // Only reject if we haven't started yet (listening phase)
+        // After listening, errors should be logged but not crash the server
+        if (tcpServerStarted) {
+          logger.warn('TCP server error after startup - attempting to continue', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        } else {
+          reject(err);
+        }
       });
 
       this.tcpServer.listen(this.port, this.bindAddress, () => {
+        tcpServerStarted = true;
         logger.info('DNS server (TCP) running', { port: this.port, address: this.bindAddress });
         resolve();
       });

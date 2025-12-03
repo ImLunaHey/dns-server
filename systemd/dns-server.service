@@ -1,0 +1,53 @@
+[Unit]
+Description=DNS Server with Ad-Blocking
+Documentation=https://github.com/yourusername/dns-server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/dns-server/apps/server
+Environment="NODE_ENV=production"
+Environment="PATH=/usr/bin:/usr/local/bin"
+# Optional: Set custom environment variables
+# Environment="DNS_BIND_ADDRESS=0.0.0.0"
+# Environment="LOG_LEVEL=info"
+
+# Run the server directly with node (no pnpm needed for runtime)
+# The install script will replace /usr/bin/node with the actual node path
+ExecStart=/usr/bin/node /opt/dns-server/apps/server/dist/index.js
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Security settings
+# Note: Port 53 requires root or CAP_NET_BIND_SERVICE capability
+# For better security, consider using capabilities instead of running as root:
+# CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
+# AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
+# User=dns-server
+# Group=dns-server
+NoNewPrivileges=false
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dns-server
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
+

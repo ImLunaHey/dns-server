@@ -1,0 +1,44 @@
+[Unit]
+Description=DNS Server Dashboard (Client)
+Documentation=https://github.com/yourusername/dns-server
+After=network.target dns-server.service
+Wants=network-online.target
+Requires=dns-server.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/dns-server/apps/client
+Environment="NODE_ENV=production"
+Environment="PATH=/usr/bin:/usr/local/bin"
+# Load nvm if available
+EnvironmentFile=-/etc/dns-server/nvm-env
+
+# Use npx to run vite preview (serves the built client)
+# The client is built to dist/ and served via vite preview
+ExecStart=/usr/bin/npx --yes vite preview --host 0.0.0.0 --port 3000
+
+# Restart policy
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dns-client
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
+

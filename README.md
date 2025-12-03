@@ -430,6 +430,30 @@ If DoH queries fail:
 - Tracks cached vs non-cached queries for performance analysis
 - Real-time health monitoring and metrics
 
+## Production Deployment
+
+### Systemd Service
+
+For production deployment on Linux systems, a systemd service file is included:
+
+```bash
+# Install the service
+sudo cp systemd/dns-server.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable dns-server.service
+sudo systemctl start dns-server.service
+```
+
+See `systemd/README.md` for detailed installation and configuration instructions.
+
+### Docker
+
+A Dockerfile and docker-compose.yml are included for containerized deployment:
+
+```bash
+docker-compose up -d
+```
+
 ## License
 
 MIT
