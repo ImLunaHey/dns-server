@@ -419,7 +419,6 @@ export function recordDNSQuery(attributes: {
 }): void {
   const meter = getMeter('dns-server', '1.0.0');
   if (!meter) {
-    logger.debug('OpenTelemetry meter not available, skipping DNS query metrics');
     return;
   }
 
