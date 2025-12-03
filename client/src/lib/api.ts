@@ -416,6 +416,11 @@ export const api = {
     nodeVersion?: string;
     dnssecValidation?: boolean;
     dnssecChainValidation?: boolean;
+    otelEnabled?: boolean;
+    otelExporterType?: 'otlp' | 'prometheus';
+    otelEndpoint?: string;
+    otelHeaders?: string;
+    otelPrometheusPort?: number;
   }> {
     const response = await fetch(`${API_URL}/api/settings`);
     return response.json();
@@ -442,6 +447,11 @@ export const api = {
     doqKeyPath?: string;
     dnssecValidation?: boolean;
     dnssecChainValidation?: boolean;
+    otelEnabled?: boolean;
+    otelExporterType?: 'otlp' | 'prometheus';
+    otelEndpoint?: string;
+    otelHeaders?: string;
+    otelPrometheusPort?: number;
   }): Promise<void> {
     await fetch(`${API_URL}/api/settings`, {
       method: "PUT",

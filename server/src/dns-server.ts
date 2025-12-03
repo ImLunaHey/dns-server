@@ -31,6 +31,7 @@ import { validateDNSSEC, validateChainOfTrust } from './dnssec-validator.js';
 import { signRRset, generateDNSKEYRecord } from './dnssec-signer.js';
 import { handleDNSUpdate } from './ddns-handler.js';
 import { handleAXFR, handleIXFR } from './zone-transfer-handler.js';
+import { recordDNSQuery, recordCacheMetrics, recordUpstreamMetrics, recordRateLimitMetrics } from './otel-metrics.js';
 
 export interface DNSQuery {
   id: string;
@@ -1506,12 +1507,24 @@ export class DNSServer {
             const responseTime = Date.now() - startTime;
             this.markUpstreamSuccess(targetDNS);
             dbUpstreamMetrics.insert(targetDNS, responseTime, true, queryType);
+            recordUpstreamMetrics({
+              upstream: targetDNS,
+              success: true,
+              responseTime,
+              queryType,
+            });
             return dohResponse;
           } catch (error) {
             const responseTime = Date.now() - startTime;
             errors.push(error instanceof Error ? error : new Error(String(error)));
             this.markUpstreamFailure(targetDNS);
             dbUpstreamMetrics.insert(targetDNS, responseTime, false, queryType);
+            recordUpstreamMetrics({
+              upstream: targetDNS,
+              success: false,
+              responseTime,
+              queryType,
+            });
             logger.debug('DoH query failed, trying next upstream', {
               error: error instanceof Error ? error : new Error(String(error)),
               targetDNS,
@@ -1527,12 +1540,24 @@ export class DNSServer {
             const responseTime = Date.now() - startTime;
             this.markUpstreamSuccess(targetDNS);
             dbUpstreamMetrics.insert(targetDNS, responseTime, true, queryType);
+            recordUpstreamMetrics({
+              upstream: targetDNS,
+              success: true,
+              responseTime,
+              queryType,
+            });
             return dotResponse;
           } catch (error) {
             const responseTime = Date.now() - startTime;
             errors.push(error instanceof Error ? error : new Error(String(error)));
             this.markUpstreamFailure(targetDNS);
             dbUpstreamMetrics.insert(targetDNS, responseTime, false, queryType);
+            recordUpstreamMetrics({
+              upstream: targetDNS,
+              success: false,
+              responseTime,
+              queryType,
+            });
             logger.debug('DoT query failed, trying next upstream', {
               error: error instanceof Error ? error : new Error(String(error)),
               targetDNS,
@@ -1547,12 +1572,24 @@ export class DNSServer {
           const responseTime = Date.now() - startTime;
           this.markUpstreamSuccess(targetDNS);
           dbUpstreamMetrics.insert(targetDNS, responseTime, true, queryType);
+          recordUpstreamMetrics({
+            upstream: targetDNS,
+            success: true,
+            responseTime,
+            queryType,
+          });
           return response;
         } catch (error) {
           const responseTime = Date.now() - startTime;
           errors.push(error instanceof Error ? error : new Error(String(error)));
           this.markUpstreamFailure(targetDNS);
           dbUpstreamMetrics.insert(targetDNS, responseTime, false, queryType);
+          recordUpstreamMetrics({
+            upstream: targetDNS,
+            success: false,
+            responseTime,
+            queryType,
+          });
           logger.debug('UDP/TCP query failed, trying next upstream', {
             error: error instanceof Error ? error : new Error(String(error)),
             targetDNS,
@@ -2322,8 +2359,10 @@ export class DNSServer {
       if (!rateLimitResult.allowed) {
         // Rate limited - return NXDOMAIN
         logger.warn('Rate limited', { clientIp });
+        recordRateLimitMetrics(clientIp, true);
         return this.createDNSResponse(msg, true);
       }
+      recordRateLimitMetrics(clientIp, false);
     }
 
     // Check authoritative zones first
@@ -2334,6 +2373,7 @@ export class DNSServer {
       const cached = this.getCachedResponse(domain, type);
       if (cached) {
         const queryId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const responseTime = Date.now() - startTime;
         const query: DNSQuery = {
           id: queryId,
           domain,
@@ -2341,10 +2381,19 @@ export class DNSServer {
           blocked: false,
           timestamp: Date.now(),
           clientIp,
-          responseTime: Date.now() - startTime,
+          responseTime,
           cached: true,
         };
         this.addQuery(query);
+        recordDNSQuery({
+          domain,
+          type: query.type,
+          blocked: false,
+          cached: true,
+          responseTime,
+          clientIp,
+        });
+        recordCacheMetrics('hit', domain, query.type);
         logger.debug('Cached (authoritative)', { domain, type, zone: zone.domain });
         return cached;
       }
@@ -2353,17 +2402,28 @@ export class DNSServer {
         // Cache authoritative responses
         this.setCachedResponse(domain, type, authResponse);
         const queryId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const responseTime = Date.now() - startTime;
+        const queryType = type === 1 ? 'A' : type === 28 ? 'AAAA' : `TYPE${type}`;
         const query: DNSQuery = {
           id: queryId,
           domain,
-          type: type === 1 ? 'A' : type === 28 ? 'AAAA' : `TYPE${type}`,
+          type: queryType,
           blocked: false,
           timestamp: Date.now(),
           clientIp,
-          responseTime: Date.now() - startTime,
+          responseTime,
           cached: false,
         };
         this.addQuery(query);
+        recordDNSQuery({
+          domain,
+          type: queryType,
+          blocked: false,
+          cached: false,
+          responseTime,
+          clientIp,
+        });
+        recordCacheMetrics('set', domain, queryType);
         logger.debug('Authoritative response', { domain, type, zone: zone.domain });
         return authResponse;
       }
@@ -2489,20 +2549,38 @@ export class DNSServer {
     const responseFlags = response.readUInt16BE(2);
     const rcode = responseFlags & 0x0f;
 
+    const responseTime = Date.now() - startTime;
+    const queryType = type === 1 ? 'A' : type === 28 ? 'AAAA' : `TYPE${type}`;
     const query: DNSQuery = {
       id: queryId,
       domain,
-      type: type === 1 ? 'A' : type === 28 ? 'AAAA' : `TYPE${type}`,
+      type: queryType,
       blocked,
       timestamp: Date.now(),
       clientIp,
       blockReason: blockResult.reason,
       cached: isCached,
-      responseTime: Date.now() - startTime,
+      responseTime,
       rcode,
     };
 
     this.addQuery(query);
+
+    // Record OpenTelemetry metrics
+    recordDNSQuery({
+      domain,
+      type: queryType,
+      blocked,
+      cached: isCached,
+      blockReason: blockResult.reason,
+      rcode,
+      responseTime,
+      clientIp,
+    });
+
+    if (isCached) {
+      recordCacheMetrics('hit', domain, queryType);
+    }
 
     return response;
   }

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
@@ -1576,6 +1577,11 @@ app.get('/api/settings', requireAuth, (c) => {
     nodeVersion: process.version,
     dnssecValidation: dbSettings.get('dnssecValidation', 'false') === 'true',
     dnssecChainValidation: dbSettings.get('dnssecChainValidation', 'false') === 'true',
+    otelEnabled: dbSettings.get('otelEnabled', 'false') === 'true',
+    otelExporterType: dbSettings.get('otelExporterType', 'otlp'),
+    otelEndpoint: dbSettings.get('otelEndpoint', 'http://localhost:4318/v1/metrics'),
+    otelHeaders: dbSettings.get('otelHeaders', ''),
+    otelPrometheusPort: parseInt(dbSettings.get('otelPrometheusPort', '9464'), 10),
   });
 });
 
@@ -1611,6 +1617,11 @@ app.put('/api/settings', requireAuth, async (c) => {
     doqKeyPath,
     dnssecValidation,
     dnssecChainValidation,
+    otelEnabled,
+    otelExporterType,
+    otelEndpoint,
+    otelHeaders,
+    otelPrometheusPort,
   } = await c.req.json();
 
   // Force disable DoQ if Node.js version is too old
@@ -1744,6 +1755,83 @@ app.put('/api/settings', requireAuth, async (c) => {
 
   if (typeof dnssecChainValidation === 'boolean') {
     dbSettings.set('dnssecChainValidation', dnssecChainValidation.toString());
+  }
+
+  // OpenTelemetry settings
+  let otelSettingsChanged = false;
+  const previousOtelEnabled = dbSettings.get('otelEnabled', 'false') === 'true';
+  const previousOtelExporterType = dbSettings.get('otelExporterType', 'otlp');
+  const previousOtelEndpoint = dbSettings.get('otelEndpoint', 'http://localhost:4318/v1/metrics');
+  const previousOtelHeaders = dbSettings.get('otelHeaders', '');
+  const previousOtelPrometheusPort = parseInt(dbSettings.get('otelPrometheusPort', '9464'), 10);
+
+  if (typeof otelEnabled === 'boolean') {
+    const newOtelEnabled = otelEnabled;
+    if (newOtelEnabled !== previousOtelEnabled) {
+      otelSettingsChanged = true;
+    }
+    dbSettings.set('otelEnabled', otelEnabled.toString());
+  }
+
+  if (
+    otelExporterType &&
+    typeof otelExporterType === 'string' &&
+    (otelExporterType === 'otlp' || otelExporterType === 'prometheus')
+  ) {
+    if (otelExporterType !== previousOtelExporterType) {
+      otelSettingsChanged = true;
+    }
+    dbSettings.set('otelExporterType', otelExporterType);
+  }
+
+  if (otelEndpoint && typeof otelEndpoint === 'string') {
+    if (otelEndpoint !== previousOtelEndpoint) {
+      otelSettingsChanged = true;
+    }
+    dbSettings.set('otelEndpoint', otelEndpoint);
+  }
+
+  if (otelHeaders !== undefined && typeof otelHeaders === 'string') {
+    if (otelHeaders !== previousOtelHeaders) {
+      otelSettingsChanged = true;
+    }
+    dbSettings.set('otelHeaders', otelHeaders);
+  }
+
+  if (otelPrometheusPort && typeof otelPrometheusPort === 'number' && otelPrometheusPort > 0) {
+    if (otelPrometheusPort !== previousOtelPrometheusPort) {
+      otelSettingsChanged = true;
+    }
+    dbSettings.set('otelPrometheusPort', otelPrometheusPort.toString());
+  }
+
+  // Reinitialize OTEL metrics if settings changed
+  if (otelSettingsChanged) {
+    const { initializeOtelMetrics } = await import('./otel-metrics.js');
+    const config: {
+      enabled: boolean;
+      exporterType: 'otlp' | 'prometheus';
+      endpoint: string;
+      prometheusPort: number;
+      headers?: Record<string, string>;
+    } = {
+      enabled: dbSettings.get('otelEnabled', 'false') === 'true',
+      exporterType: dbSettings.get('otelExporterType', 'otlp') as 'otlp' | 'prometheus',
+      endpoint: dbSettings.get('otelEndpoint', 'http://localhost:4318/v1/metrics'),
+      prometheusPort: parseInt(dbSettings.get('otelPrometheusPort', '9464'), 10),
+    };
+
+    const headersStr = dbSettings.get('otelHeaders', '');
+    if (headersStr) {
+      try {
+        config.headers = JSON.parse(headersStr);
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    initializeOtelMetrics(config);
+    logger.info('OpenTelemetry metrics reinitialized', { config });
   }
 
   // Track if DoQ settings changed
@@ -2011,7 +2099,7 @@ app.delete('/api/scheduled-tasks/:id', requireAuth, (c) => {
 app.post('/api/scheduled-tasks/:id/run', requireAuth, async (c) => {
   const id = parseInt(c.req.param('id'), 10);
   const task = dbScheduledTasks.getAll().find((t) => t.id === id);
-  
+
   if (!task) {
     return c.json({ error: 'Task not found' }, 404);
   }
@@ -2040,7 +2128,7 @@ app.post('/api/scheduled-tasks/:id/run', requireAuth, async (c) => {
 
       // Mark task as run (update lastRun and nextRun)
       dbScheduledTasks.markRun(id);
-      
+
       return c.json({ success: true, message: 'Task started', updateId });
     }
 
@@ -2056,7 +2144,7 @@ app.post('/api/scheduled-tasks/:id/run', requireAuth, async (c) => {
 app.get('/api/scheduled-tasks/:id/logs', requireAuth, (c) => {
   const id = parseInt(c.req.param('id'), 10);
   const task = dbScheduledTasks.getAll().find((t) => t.id === id);
-  
+
   if (!task) {
     return c.json({ error: 'Task not found' }, 404);
   }
@@ -2749,6 +2837,35 @@ async function runScheduledTasks() {
 
 async function main() {
   logger.info('Initializing DNS server...');
+
+  // Initialize OpenTelemetry metrics if enabled
+  const { initializeOtelMetrics } = await import('./otel-metrics.js');
+  const otelEnabled = dbSettings.get('otelEnabled', 'false') === 'true';
+  if (otelEnabled) {
+    const otelConfig: {
+      enabled: boolean;
+      exporterType: 'otlp' | 'prometheus';
+      endpoint: string;
+      prometheusPort: number;
+      headers?: Record<string, string>;
+    } = {
+      enabled: true,
+      exporterType: dbSettings.get('otelExporterType', 'otlp') as 'otlp' | 'prometheus',
+      endpoint: dbSettings.get('otelEndpoint', 'http://localhost:4318/v1/metrics'),
+      prometheusPort: parseInt(dbSettings.get('otelPrometheusPort', '9464'), 10),
+    };
+
+    const headersStr = dbSettings.get('otelHeaders', '');
+    if (headersStr) {
+      try {
+        otelConfig.headers = JSON.parse(headersStr);
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    initializeOtelMetrics(otelConfig);
+  }
 
   // Cleanup old queries based on retention setting
   const retentionDays = parseInt(dbSettings.get('queryRetentionDays', '7'), 10);

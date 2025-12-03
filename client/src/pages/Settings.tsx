@@ -78,6 +78,11 @@ const settingsSchema = z.object({
   doqKeyPath: z.string().optional(),
   dnssecValidation: z.boolean().optional(),
   dnssecChainValidation: z.boolean().optional(),
+  otelEnabled: z.boolean().optional(),
+  otelExporterType: z.enum(["otlp", "prometheus"]).optional(),
+  otelEndpoint: z.string().optional(),
+  otelHeaders: z.string().optional(),
+  otelPrometheusPort: z.number().int().min(1).max(65535).optional(),
 });
 
 type SettingsFormData = z.infer<typeof settingsSchema>;
@@ -100,7 +105,10 @@ export function Settings() {
   } = useForm<SettingsFormData>({
     mode: "onChange", // Validate on change to show errors immediately
     defaultValues: {
-      upstreamDNS: settings?.upstreamDNS || settings?.upstreamDNSList?.join(",") || "1.1.1.1",
+      upstreamDNS:
+        settings?.upstreamDNS ||
+        settings?.upstreamDNSList?.join(",") ||
+        "1.1.1.1",
       queryRetentionDays: settings?.queryRetentionDays ?? 7,
       privacyMode: Boolean(settings?.privacyMode ?? false),
       rateLimitEnabled: Boolean(settings?.rateLimitEnabled ?? false),
@@ -123,7 +131,10 @@ export function Settings() {
   useEffect(() => {
     if (settings) {
       reset({
-        upstreamDNS: settings.upstreamDNS || settings.upstreamDNSList?.join(",") || "1.1.1.1",
+        upstreamDNS:
+          settings.upstreamDNS ||
+          settings.upstreamDNSList?.join(",") ||
+          "1.1.1.1",
         queryRetentionDays: settings.queryRetentionDays ?? 7,
         privacyMode: Boolean(settings.privacyMode ?? false),
         rateLimitEnabled: Boolean(settings.rateLimitEnabled ?? false),
@@ -145,6 +156,14 @@ export function Settings() {
         doqKeyPath: settings.doqKeyPath ?? settings.dotKeyPath ?? "",
         dnssecValidation: Boolean(settings.dnssecValidation ?? false),
         dnssecChainValidation: Boolean(settings.dnssecChainValidation ?? false),
+        otelEnabled: Boolean(settings.otelEnabled ?? false),
+        otelExporterType: (settings.otelExporterType ?? "otlp") as
+          | "otlp"
+          | "prometheus",
+        otelEndpoint:
+          settings.otelEndpoint ?? "http://localhost:4318/v1/metrics",
+        otelHeaders: settings.otelHeaders ?? "",
+        otelPrometheusPort: settings.otelPrometheusPort ?? 9464,
       });
     }
   }, [settings, reset]);
@@ -156,6 +175,9 @@ export function Settings() {
   const rateLimitWindowMs = watch("rateLimitWindowMs");
   const dotEnabled = watch("dotEnabled");
   const dnssecValidation = watch("dnssecValidation");
+  const otelEnabled = watch("otelEnabled");
+  const otelExporterType = watch("otelExporterType");
+  const otelPrometheusPort = watch("otelPrometheusPort");
 
   // Re-validate DoT fields when dotEnabled changes
   useEffect(() => {
@@ -249,7 +271,8 @@ export function Settings() {
                             className={cn(
                               "w-full text-left px-2 py-1 text-xs rounded",
                               "bg-gray-600 hover:bg-gray-500 text-gray-200",
-                              (upstreamDNS === provider.ipv4[0] || upstreamDNS === provider.ipv4.join(",")) &&
+                              (upstreamDNS === provider.ipv4[0] ||
+                                upstreamDNS === provider.ipv4.join(",")) &&
                                 "bg-blue-600 hover:bg-blue-700 text-white"
                             )}
                             title={`Primary: ${provider.ipv4[0]}, Secondary: ${provider.ipv4[1]} (both will be set for failover)`}
@@ -260,12 +283,16 @@ export function Settings() {
                             <button
                               type="button"
                               onClick={() =>
-                                setValue("upstreamDNS", provider.ipv6!.join(","))
+                                setValue(
+                                  "upstreamDNS",
+                                  provider.ipv6!.join(",")
+                                )
                               }
                               className={cn(
                                 "w-full text-left px-2 py-1 text-xs rounded",
                                 "bg-gray-600 hover:bg-gray-500 text-gray-200",
-                                (upstreamDNS === provider.ipv6[0] || upstreamDNS === provider.ipv6.join(",")) &&
+                                (upstreamDNS === provider.ipv6[0] ||
+                                  upstreamDNS === provider.ipv6.join(",")) &&
                                   "bg-blue-600 hover:bg-blue-700 text-white"
                               )}
                               title={`Primary: ${provider.ipv6[0]}, Secondary: ${provider.ipv6[1]} (both will be set for failover)`}
@@ -308,7 +335,10 @@ export function Settings() {
                       )}
                     />
                     <p className="text-xs text-gray-400 mt-1">
-                      IP address(es) of upstream DNS server(s). Multiple servers can be comma-separated for automatic failover (e.g., 1.1.1.1,8.8.8.8). Supports IP addresses, DoH (https://), and DoT (tls://) URLs.
+                      IP address(es) of upstream DNS server(s). Multiple servers
+                      can be comma-separated for automatic failover (e.g.,
+                      1.1.1.1,8.8.8.8). Supports IP addresses, DoH (https://),
+                      and DoT (tls://) URLs.
                     </p>
                   </FormField>
                 </div>
@@ -957,6 +987,157 @@ export function Settings() {
                   content type
                 </p>
               </div>
+            </div>
+          </Panel>
+
+          {/* OpenTelemetry Metrics Settings */}
+          <Panel>
+            <h2 className="text-xl font-semibold text-white mb-6">
+              OpenTelemetry Metrics
+            </h2>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Enable OpenTelemetry Metrics
+                  </label>
+                  <p className="text-xs text-gray-400">
+                    Export metrics to OpenTelemetry-compatible backends
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    {...register("otelEnabled", {
+                      onChange: (e) =>
+                        setValue("otelEnabled", Boolean(e.target.checked)),
+                    })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+
+              {otelEnabled && (
+                <>
+                  <FormField
+                    label="Exporter Type"
+                    error={errors.otelExporterType?.message}
+                  >
+                    <select
+                      {...register("otelExporterType", {
+                        onChange: (e) =>
+                          setValue(
+                            "otelExporterType",
+                            e.target.value as "otlp" | "prometheus"
+                          ),
+                      })}
+                      className={cn(
+                        "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
+                        "focus:outline-none focus:ring-2 focus:ring-blue-500",
+                        errors.otelExporterType && "border-red-500"
+                      )}
+                    >
+                      <option value="otlp">
+                        OTLP (OpenTelemetry Protocol)
+                      </option>
+                      <option value="prometheus">Prometheus</option>
+                    </select>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Choose how to export metrics. OTLP sends to an
+                      OpenTelemetry collector or backend. Prometheus exposes a
+                      /metrics endpoint.
+                    </p>
+                  </FormField>
+
+                  {otelExporterType === "otlp" ? (
+                    <>
+                      <FormField
+                        label="OTLP Endpoint"
+                        error={errors.otelEndpoint?.message}
+                      >
+                        <input
+                          type="text"
+                          {...register("otelEndpoint")}
+                          placeholder="http://localhost:4318/v1/metrics"
+                          className={cn(
+                            "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
+                            "focus:outline-none focus:ring-2 focus:ring-blue-500",
+                            errors.otelEndpoint && "border-red-500"
+                          )}
+                        />
+                        <p className="text-xs text-gray-400 mt-1">
+                          OTLP HTTP endpoint URL for metrics export
+                        </p>
+                      </FormField>
+
+                      <FormField
+                        label="Headers (JSON)"
+                        error={errors.otelHeaders?.message}
+                      >
+                        <textarea
+                          {...register("otelHeaders", {
+                            validate: (value) => {
+                              if (!value || value.trim() === "") return true;
+                              try {
+                                JSON.parse(value);
+                                return true;
+                              } catch {
+                                return "Invalid JSON format";
+                              }
+                            },
+                          })}
+                          placeholder='{"Authorization": "Bearer token"}'
+                          rows={3}
+                          className={cn(
+                            "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white font-mono text-sm",
+                            "focus:outline-none focus:ring-2 focus:ring-blue-500",
+                            errors.otelHeaders && "border-red-500"
+                          )}
+                        />
+                        <p className="text-xs text-gray-400 mt-1">
+                          Optional HTTP headers as JSON (e.g., for
+                          authentication)
+                        </p>
+                      </FormField>
+                    </>
+                  ) : (
+                    <FormField
+                      label="Prometheus Port"
+                      error={errors.otelPrometheusPort?.message}
+                    >
+                      <input
+                        type="number"
+                        {...register("otelPrometheusPort", {
+                          valueAsNumber: true,
+                        })}
+                        min="1"
+                        max="65535"
+                        className={cn(
+                          "w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white",
+                          "focus:outline-none focus:ring-2 focus:ring-blue-500",
+                          errors.otelPrometheusPort && "border-red-500"
+                        )}
+                      />
+                      <p className="text-xs text-gray-400 mt-1">
+                        Port for Prometheus metrics endpoint (default: 9464).
+                        Metrics will be available at http://localhost:
+                        {otelPrometheusPort || 9464}/metrics
+                      </p>
+                    </FormField>
+                  )}
+
+                  <div className="bg-blue-900/20 border border-blue-700 rounded-lg p-3">
+                    <p className="text-xs text-blue-300">
+                      <strong>Metrics exported:</strong> DNS queries (total,
+                      blocked, cached), response times, upstream DNS
+                      performance, cache operations, rate limiting, and server
+                      statistics.
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           </Panel>
 
