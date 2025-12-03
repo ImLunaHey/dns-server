@@ -10,20 +10,18 @@ import { Input } from "../components/Input";
 import { FormField } from "../components/FormField";
 import { Select } from "../components/Select";
 import { useToastContext } from "../contexts/ToastContext";
+import { useConfirmModal } from "../components/ConfirmModal";
+import { useModalManager } from "../contexts/ModalContext";
 
 export function DDNS() {
   const queryClient = useQueryClient();
   const toast = useToastContext();
+  const confirmModal = useConfirmModal();
+  const modalManager = useModalManager();
   const [showAddForm, setShowAddForm] = useState(false);
   const [newName, setNewName] = useState("");
   const [newAlgorithm, setNewAlgorithm] = useState("hmac-sha256");
   const [newSecret, setNewSecret] = useState("");
-
-  // Simple DDNS token state
-  const [showAddTokenForm, setShowAddTokenForm] = useState(false);
-  const [editingTokenId, setEditingTokenId] = useState<number | null>(null);
-  const [newTokenDomain, setNewTokenDomain] = useState("");
-  const [newTokenRecordType, setNewTokenRecordType] = useState("A");
 
   const { data: keys = [], isLoading } = useQuery({
     queryKey: ["tsig-keys"],
@@ -83,22 +81,6 @@ export function DDNS() {
     }
   };
 
-  const createToken = useMutation({
-    mutationFn: (data: { domain: string; recordType?: string }) =>
-      api.createDDNSToken(data),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["ddns-tokens"] });
-      setShowAddTokenForm(false);
-      resetTokenForm();
-      toast.success(
-        `DDNS token created! Use: ${window.location.origin}/api/ddns/update?token=${data.token}`
-      );
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || "Failed to create DDNS token");
-    },
-  });
-
   const toggleTokenEnabled = useMutation({
     mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
       api.updateDDNSTokenEnabled(id, enabled),
@@ -122,63 +104,18 @@ export function DDNS() {
     },
   });
 
-  const updateToken = useMutation({
-    mutationFn: ({
-      id,
-      data,
-    }: {
-      id: number;
-      data: { domain: string; recordType?: string };
-    }) => api.updateDDNSToken(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["ddns-tokens"] });
-      setEditingTokenId(null);
-      setShowAddTokenForm(false);
-      resetTokenForm();
-      toast.success("DDNS token updated successfully");
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || "Failed to update DDNS token");
-    },
-  });
-
-  const resetTokenForm = () => {
-    setNewTokenDomain("");
-    setNewTokenRecordType("A");
-  };
-
   const handleAddToken = () => {
-    if (newTokenDomain.trim()) {
-      createToken.mutate({
-        domain: newTokenDomain.trim(),
-        recordType: newTokenRecordType,
-      });
-    }
+    modalManager.add("ddns-token-form", () => <DDNSTokenFormModal />, {
+      size: "md",
+    });
   };
 
   const handleEditToken = (token: (typeof tokens)[0]) => {
-    setEditingTokenId(token.id);
-    setNewTokenDomain(token.domain);
-    setNewTokenRecordType(token.recordType);
-    setShowAddTokenForm(true);
-  };
-
-  const handleUpdateToken = () => {
-    if (editingTokenId && newTokenDomain.trim()) {
-      updateToken.mutate({
-        id: editingTokenId,
-        data: {
-          domain: newTokenDomain.trim(),
-          recordType: newTokenRecordType,
-        },
-      });
-    }
-  };
-
-  const handleCancelToken = () => {
-    setShowAddTokenForm(false);
-    setEditingTokenId(null);
-    resetTokenForm();
+    modalManager.add(
+      "ddns-token-form",
+      () => <DDNSTokenFormModal token={token} />,
+      { size: "md" }
+    );
   };
 
   if (isLoading || tokensLoading) {
@@ -313,13 +250,13 @@ export function DDNS() {
                     title: "Delete",
                     color: "red" as const,
                     onClick: () => {
-                      if (
-                        confirm(
-                          `Are you sure you want to delete TSIG key "${row.name}"?`
-                        )
-                      ) {
-                        deleteKey.mutate(row.id);
-                      }
+                      confirmModal(
+                        `delete-tsig-key-${row.id}`,
+                        "Delete TSIG Key",
+                        `Are you sure you want to delete the TSIG key "${row.name}"?`,
+                        () => deleteKey.mutate(row.id),
+                        { confirmLabel: "Delete", confirmColor: "red" }
+                      );
                     },
                   },
                 ]}
@@ -332,56 +269,10 @@ export function DDNS() {
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
                 Simple HTTP-based DDNS Tokens
               </h2>
-              {!showAddTokenForm && (
-                <Button onClick={() => setShowAddTokenForm(true)} size="sm">
-                  Add Token
-                </Button>
-              )}
+              <Button onClick={handleAddToken} size="sm">
+                Add Token
+              </Button>
             </div>
-            {showAddTokenForm && (
-              <div className="mb-4 p-4 border border-gray-200 dark:border-gray-700 rounded">
-                <h3 className="text-md font-medium text-gray-900 dark:text-white mb-4">
-                  {editingTokenId ? "Edit Token" : "Add New Token"}
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <FormField label="Domain">
-                    <Input
-                      type="text"
-                      value={newTokenDomain}
-                      onChange={(e) => setNewTokenDomain(e.target.value)}
-                      placeholder="example.com"
-                    />
-                  </FormField>
-                  <FormField label="Record Type">
-                    <Select
-                      value={newTokenRecordType}
-                      onChange={(e) => setNewTokenRecordType(e.target.value)}
-                    >
-                      <option value="A">A (IPv4)</option>
-                      <option value="AAAA">AAAA (IPv6)</option>
-                    </Select>
-                  </FormField>
-                  <div className="flex items-end gap-2">
-                    <Button
-                      onClick={
-                        editingTokenId ? handleUpdateToken : handleAddToken
-                      }
-                      disabled={
-                        (editingTokenId
-                          ? updateToken.isPending
-                          : createToken.isPending) || !newTokenDomain.trim()
-                      }
-                      className="flex-1"
-                    >
-                      {editingTokenId ? "Update Token" : "Create Token"}
-                    </Button>
-                    <Button onClick={handleCancelToken} variant="outline">
-                      Cancel
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
             {tokens.length === 0 ? (
               <p className="text-gray-500 dark:text-gray-400">
                 No DDNS tokens configured. Create one to enable simple
@@ -437,13 +328,13 @@ export function DDNS() {
                     title: "Delete",
                     color: "red" as const,
                     onClick: () => {
-                      if (
-                        confirm(
-                          `Are you sure you want to delete the DDNS token for "${row.domain}"?`
-                        )
-                      ) {
-                        deleteToken.mutate(row.id);
-                      }
+                      confirmModal(
+                        `delete-dns-token-${row.id}`,
+                        "Delete DDNS Token",
+                        `Are you sure you want to delete the DDNS token for "${row.domain}"?`,
+                        () => deleteToken.mutate(row.id),
+                        { confirmLabel: "Delete", confirmColor: "red" }
+                      );
                     },
                   },
                 ]}
@@ -577,5 +468,119 @@ export function DDNS() {
         </div>
       </main>
     </>
+  );
+}
+
+function DDNSTokenFormModal({
+  token,
+}: {
+  token?: {
+    id: number;
+    domain: string;
+    recordType: string;
+  };
+}) {
+  const queryClient = useQueryClient();
+  const toast = useToastContext();
+  const modalManager = useModalManager();
+  const [domain, setDomain] = useState(token?.domain || "");
+  const [recordType, setRecordType] = useState(token?.recordType || "A");
+
+  const createToken = useMutation({
+    mutationFn: (data: { domain: string; recordType?: string }) =>
+      api.createDDNSToken(data),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["ddns-tokens"] });
+      modalManager.remove("ddns-token-form");
+      toast.success(
+        `DDNS token created! Use: ${window.location.origin}/api/ddns/update?token=${data.token}`
+      );
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to create DDNS token");
+    },
+  });
+
+  const updateToken = useMutation({
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: number;
+      data: { domain: string; recordType?: string };
+    }) => api.updateDDNSToken(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ddns-tokens"] });
+      modalManager.remove("ddns-token-form");
+      toast.success("DDNS token updated successfully");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to update DDNS token");
+    },
+  });
+
+  const handleSubmit = () => {
+    if (domain.trim()) {
+      if (token) {
+        updateToken.mutate({
+          id: token.id,
+          data: {
+            domain: domain.trim(),
+            recordType,
+          },
+        });
+      } else {
+        createToken.mutate({
+          domain: domain.trim(),
+          recordType,
+        });
+      }
+    }
+  };
+
+  const handleCancel = () => {
+    modalManager.remove("ddns-token-form");
+  };
+
+  const isPending = token ? updateToken.isPending : createToken.isPending;
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+          {token ? "Edit Token" : "Add New Token"}
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Create a simple HTTP-based DDNS token for automatic IP updates
+        </p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <FormField label="Domain">
+          <Input
+            type="text"
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+            placeholder="example.com"
+          />
+        </FormField>
+        <FormField label="Record Type">
+          <Select
+            value={recordType}
+            onChange={(e) => setRecordType(e.target.value)}
+          >
+            <option value="A">A (IPv4)</option>
+            <option value="AAAA">AAAA (IPv6)</option>
+          </Select>
+        </FormField>
+      </div>
+      <div className="flex gap-2 justify-end">
+        <Button onClick={handleCancel} variant="outline" disabled={isPending}>
+          Cancel
+        </Button>
+        <Button onClick={handleSubmit} disabled={isPending || !domain.trim()}>
+          {token ? "Update Token" : "Create Token"}
+        </Button>
+      </div>
+    </div>
   );
 }

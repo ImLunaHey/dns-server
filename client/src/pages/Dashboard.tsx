@@ -14,6 +14,7 @@ import { Loading } from "../components/Loading";
 import { PageHeader } from "../components/PageHeader";
 import { Button } from "../components/Button";
 import { api } from "../lib/api";
+import { useToastContext } from "../contexts/ToastContext";
 
 export function Dashboard() {
   const { data: stats, isLoading: statsLoading } = useStats();
@@ -23,6 +24,7 @@ export function Dashboard() {
   const { data: clientNames = {} } = useClientNames();
   const blockMutation = useBlockDomain();
   const allowMutation = useAllowDomain();
+  const toast = useToastContext();
 
   const handleBlock = (domain: string) => {
     blockMutation.mutate(domain);
@@ -62,7 +64,7 @@ export function Dashboard() {
                 a.click();
                 URL.revokeObjectURL(url);
               } catch (error) {
-                alert(
+                toast.error(
                   error instanceof Error
                     ? error.message
                     : "Failed to export statistics"
@@ -86,7 +88,7 @@ export function Dashboard() {
                 a.click();
                 URL.revokeObjectURL(url);
               } catch (error) {
-                alert(
+                toast.error(
                   error instanceof Error
                     ? error.message
                     : "Failed to export statistics"

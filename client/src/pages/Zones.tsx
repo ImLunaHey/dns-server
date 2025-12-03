@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useConfirmModal } from "../components/ConfirmModal";
+import { useModalManager } from "../contexts/ModalContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { Panel } from "../components/Panel";
@@ -14,31 +16,14 @@ import { useToastContext } from "../contexts/ToastContext";
 export function Zones() {
   const queryClient = useQueryClient();
   const toast = useToastContext();
+  const confirmModal = useConfirmModal();
+  const modalManager = useModalManager();
   const [showCreateZone, setShowCreateZone] = useState(false);
   const [selectedZone, setSelectedZone] = useState<number | null>(null);
   const [newDomain, setNewDomain] = useState("");
   const [newSoaMname, setNewSoaMname] = useState("ns1.example.com");
   const [newSoaRname, setNewSoaRname] = useState("admin.example.com");
 
-  // Record form state
-  const [showAddRecord, setShowAddRecord] = useState(false);
-  const [newRecordName, setNewRecordName] = useState("");
-  const [newRecordType, setNewRecordType] = useState<
-    | "A"
-    | "AAAA"
-    | "MX"
-    | "TXT"
-    | "NS"
-    | "CNAME"
-    | "NAPTR"
-    | "SSHFP"
-    | "TLSA"
-    | "SVCB"
-    | "HTTPS"
-  >("A");
-  const [newRecordTTL, setNewRecordTTL] = useState("3600");
-  const [newRecordData, setNewRecordData] = useState("");
-  const [newRecordPriority, setNewRecordPriority] = useState("");
 
   const { data: zones = [], isLoading } = useQuery({
     queryKey: ["zones"],
@@ -82,39 +67,6 @@ export function Zones() {
     },
   });
 
-  const createRecord = useMutation({
-    mutationFn: (data: {
-      zoneId: number;
-      name: string;
-      type: string;
-      ttl: number;
-      data: string;
-      priority?: number;
-    }) =>
-      api.createZoneRecord(
-        data.zoneId,
-        data.name,
-        data.type,
-        data.ttl,
-        data.data,
-        data.priority
-      ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["zoneRecords", selectedZone],
-      });
-      setShowAddRecord(false);
-      setNewRecordName("");
-      setNewRecordType("A");
-      setNewRecordTTL("3600");
-      setNewRecordData("");
-      setNewRecordPriority("");
-      toast.success("Record created successfully");
-    },
-    onError: (error: Error) => {
-      toast.error(error.message);
-    },
-  });
 
   const deleteRecord = useMutation({
     mutationFn: (id: number) => api.deleteZoneRecord(id),
@@ -139,23 +91,6 @@ export function Zones() {
     }
   };
 
-  const handleCreateRecord = () => {
-    if (!selectedZone) return;
-    if (newRecordName.trim() && newRecordData.trim() && newRecordTTL.trim()) {
-      const ttl = parseInt(newRecordTTL, 10);
-      const priority = newRecordPriority.trim()
-        ? parseInt(newRecordPriority, 10)
-        : undefined;
-      createRecord.mutate({
-        zoneId: selectedZone,
-        name: newRecordName.trim(),
-        type: newRecordType,
-        ttl,
-        data: newRecordData.trim(),
-        priority,
-      });
-    }
-  };
 
   if (isLoading) {
     return <Loading fullScreen />;
@@ -256,9 +191,13 @@ export function Zones() {
                         size="sm"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (confirm(`Delete zone ${zone.domain}?`)) {
-                            deleteZone.mutate(zone.id);
-                          }
+                          confirmModal(
+                            `delete-zone-${zone.id}`,
+                            "Delete Zone",
+                            `Are you sure you want to delete the zone "${zone.domain}"? This will also delete all records in this zone.`,
+                            () => deleteZone.mutate(zone.id),
+                            { confirmLabel: "Delete", confirmColor: "red" }
+                          );
                         }}
                       >
                         Delete
@@ -278,9 +217,15 @@ export function Zones() {
               {selectedZone !== null && (
                 <Button
                   size="sm"
-                  onClick={() => setShowAddRecord(!showAddRecord)}
+                  onClick={() => {
+                    modalManager.add(
+                      `add-zone-record-${selectedZone}`,
+                      () => <AddZoneRecordModal zoneId={selectedZone} />,
+                      { size: "lg" }
+                    );
+                  }}
                 >
-                  {showAddRecord ? "Cancel" : "Add Record"}
+                  Add Record
                 </Button>
               )}
             </div>
@@ -291,127 +236,6 @@ export function Zones() {
               </p>
             ) : (
               <>
-                {showAddRecord && (
-                  <div className="mb-4 p-4 border border-gray-200 dark:border-gray-700 rounded">
-                    <h3 className="text-sm font-medium text-gray-900 dark:text-white mb-3">
-                      Add New Record
-                    </h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <FormField label="Name">
-                        <Input
-                          type="text"
-                          value={newRecordName}
-                          onChange={(e) => setNewRecordName(e.target.value)}
-                          placeholder="@ or www (use @ for zone root)"
-                        />
-                      </FormField>
-                      <FormField label="Type">
-                        <Select
-                          value={newRecordType}
-                          onChange={(e) =>
-                            setNewRecordType(
-                              e.target.value as typeof newRecordType
-                            )
-                          }
-                        >
-                          <option value="A">A (IPv4)</option>
-                          <option value="AAAA">AAAA (IPv6)</option>
-                          <option value="MX">MX (Mail Exchange)</option>
-                          <option value="TXT">TXT (Text)</option>
-                          <option value="NS">NS (Name Server)</option>
-                          <option value="CNAME">CNAME (Canonical Name)</option>
-                          <option value="NAPTR">
-                            NAPTR (Name Authority Pointer)
-                          </option>
-                          <option value="SSHFP">SSHFP (SSH Fingerprint)</option>
-                          <option value="TLSA">
-                            TLSA (DANE/TLS Authentication)
-                          </option>
-                          <option value="SVCB">SVCB (Service Binding)</option>
-                          <option value="HTTPS">
-                            HTTPS (HTTPS Service Binding)
-                          </option>
-                        </Select>
-                      </FormField>
-                      <FormField label="TTL">
-                        <Input
-                          type="number"
-                          value={newRecordTTL}
-                          onChange={(e) => setNewRecordTTL(e.target.value)}
-                          placeholder="3600"
-                        />
-                      </FormField>
-                      {newRecordType === "MX" && (
-                        <FormField label="Priority">
-                          <Input
-                            type="number"
-                            value={newRecordPriority}
-                            onChange={(e) =>
-                              setNewRecordPriority(e.target.value)
-                            }
-                            placeholder="10"
-                          />
-                        </FormField>
-                      )}
-                      <FormField
-                        label="Data"
-                        className={
-                          newRecordType === "MX" ||
-                          newRecordType === "NAPTR" ||
-                          newRecordType === "SVCB" ||
-                          newRecordType === "HTTPS"
-                            ? "md:col-span-2"
-                            : ""
-                        }
-                      >
-                        <Input
-                          type="text"
-                          value={newRecordData}
-                          onChange={(e) => setNewRecordData(e.target.value)}
-                          placeholder={
-                            newRecordType === "A"
-                              ? "192.168.1.100"
-                              : newRecordType === "AAAA"
-                              ? "2001:db8::1"
-                              : newRecordType === "MX"
-                              ? "mail.example.com"
-                              : newRecordType === "TXT"
-                              ? "text content"
-                              : newRecordType === "NS"
-                              ? "ns1.example.com"
-                              : newRecordType === "CNAME"
-                              ? "example.com"
-                              : newRecordType === "NAPTR"
-                              ? '10 10 "u" "sip+E2U" "!^.*$!sip:customer@example.com!" .'
-                              : newRecordType === "SSHFP"
-                              ? "1 1 abc123def456..."
-                              : newRecordType === "TLSA"
-                              ? "3 1 1 abc123def456..."
-                              : newRecordType === "SVCB"
-                              ? "1 . alpn=h2,h3"
-                              : newRecordType === "HTTPS"
-                              ? "1 . alpn=h2,h3 ipv4hint=1.2.3.4"
-                              : "record data"
-                          }
-                        />
-                      </FormField>
-                    </div>
-                    <div className="mt-4">
-                      <Button
-                        onClick={handleCreateRecord}
-                        disabled={
-                          createRecord.isPending ||
-                          !newRecordName.trim() ||
-                          !newRecordData.trim() ||
-                          !newRecordTTL.trim()
-                        }
-                      >
-                        Add Record
-                      </Button>
-                    </div>
-                  </div>
-                )}
-
                 {recordsLoading ? (
                   <Loading />
                 ) : records.length === 0 ? (
@@ -440,11 +264,13 @@ export function Zones() {
                         title: "Delete",
                         color: "red" as const,
                         onClick: () => {
-                          if (
-                            confirm(`Delete record ${row.name} (${row.type})?`)
-                          ) {
-                            deleteRecord.mutate(row.id);
-                          }
+                          confirmModal(
+                            `delete-record-${row.id}`,
+                            "Delete Record",
+                            `Are you sure you want to delete the record "${row.name}" (${row.type})?`,
+                            () => deleteRecord.mutate(row.id),
+                            { confirmLabel: "Delete", confirmColor: "red" }
+                          );
                         },
                         disabled: deleteRecord.isPending,
                       },
@@ -458,5 +284,201 @@ export function Zones() {
         </div>
       </main>
     </>
+  );
+}
+
+function AddZoneRecordModal({ zoneId }: { zoneId: number }) {
+  const queryClient = useQueryClient();
+  const toast = useToastContext();
+  const modalManager = useModalManager();
+  const [name, setName] = useState("");
+  const [type, setType] = useState<
+    | "A"
+    | "AAAA"
+    | "MX"
+    | "TXT"
+    | "NS"
+    | "CNAME"
+    | "NAPTR"
+    | "SSHFP"
+    | "TLSA"
+    | "SVCB"
+    | "HTTPS"
+  >("A");
+  const [ttl, setTtl] = useState("3600");
+  const [data, setData] = useState("");
+  const [priority, setPriority] = useState("");
+
+  const createRecord = useMutation({
+    mutationFn: (recordData: {
+      zoneId: number;
+      name: string;
+      type: string;
+      ttl: number;
+      data: string;
+      priority?: number;
+    }) =>
+      api.createZoneRecord(
+        recordData.zoneId,
+        recordData.name,
+        recordData.type,
+        recordData.ttl,
+        recordData.data,
+        recordData.priority
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["zoneRecords", zoneId],
+      });
+      modalManager.remove(`add-zone-record-${zoneId}`);
+      toast.success("Record created successfully");
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+  });
+
+  const handleSubmit = () => {
+    if (name.trim() && data.trim() && ttl.trim()) {
+      createRecord.mutate({
+        zoneId,
+        name: name.trim(),
+        type,
+        ttl: parseInt(ttl, 10),
+        data: data.trim(),
+        priority: type === "MX" && priority.trim() ? parseInt(priority, 10) : undefined,
+      });
+    }
+  };
+
+  const handleCancel = () => {
+    modalManager.remove(`add-zone-record-${zoneId}`);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+          Add New Record
+        </h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          Add a new DNS record to this zone
+        </p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <FormField label="Name">
+          <Input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="@ or www (use @ for zone root)"
+          />
+        </FormField>
+        <FormField label="Type">
+          <Select
+            value={type}
+            onChange={(e) =>
+              setType(
+                e.target.value as typeof type
+              )
+            }
+          >
+            <option value="A">A (IPv4)</option>
+            <option value="AAAA">AAAA (IPv6)</option>
+            <option value="MX">MX (Mail Exchange)</option>
+            <option value="TXT">TXT (Text)</option>
+            <option value="NS">NS (Name Server)</option>
+            <option value="CNAME">CNAME (Canonical Name)</option>
+            <option value="NAPTR">
+              NAPTR (Name Authority Pointer)
+            </option>
+            <option value="SSHFP">SSHFP (SSH Fingerprint)</option>
+            <option value="TLSA">
+              TLSA (DANE/TLS Authentication)
+            </option>
+            <option value="SVCB">SVCB (Service Binding)</option>
+            <option value="HTTPS">
+              HTTPS (HTTPS Service Binding)
+            </option>
+          </Select>
+        </FormField>
+        <FormField label="TTL">
+          <Input
+            type="number"
+            value={ttl}
+            onChange={(e) => setTtl(e.target.value)}
+            placeholder="3600"
+          />
+        </FormField>
+        {type === "MX" && (
+          <FormField label="Priority">
+            <Input
+              type="number"
+              value={priority}
+              onChange={(e) => setPriority(e.target.value)}
+              placeholder="10"
+            />
+          </FormField>
+        )}
+        <FormField
+          label="Data"
+          className={
+            type === "MX" ||
+            type === "NAPTR" ||
+            type === "SVCB" ||
+            type === "HTTPS"
+              ? "md:col-span-2"
+              : ""
+          }
+        >
+          <Input
+            type="text"
+            value={data}
+            onChange={(e) => setData(e.target.value)}
+            placeholder={
+              type === "A"
+                ? "192.168.1.100"
+                : type === "AAAA"
+                ? "2001:db8::1"
+                : type === "MX"
+                ? "mail.example.com"
+                : type === "TXT"
+                ? "text content"
+                : type === "NS"
+                ? "ns1.example.com"
+                : type === "CNAME"
+                ? "example.com"
+                : type === "NAPTR"
+                ? '10 10 "u" "sip+E2U" "!^.*$!sip:customer@example.com!" .'
+                : type === "SSHFP"
+                ? "1 1 abc123def456..."
+                : type === "TLSA"
+                ? "3 1 1 abc123def456..."
+                : type === "SVCB"
+                ? "1 . alpn=h2,h3"
+                : type === "HTTPS"
+                ? "1 . alpn=h2,h3 ipv4hint=1.2.3.4"
+                : "record data"
+            }
+          />
+        </FormField>
+      </div>
+      <div className="flex gap-2 justify-end">
+        <Button onClick={handleCancel} variant="outline" disabled={createRecord.isPending}>
+          Cancel
+        </Button>
+        <Button
+          onClick={handleSubmit}
+          disabled={
+            createRecord.isPending ||
+            !name.trim() ||
+            !data.trim() ||
+            !ttl.trim()
+          }
+        >
+          Add Record
+        </Button>
+      </div>
+    </div>
   );
 }

@@ -9,11 +9,13 @@ import { Input } from "../components/Input";
 import { FormField } from "../components/FormField";
 import { Select } from "../components/Select";
 import { useToastContext } from "../contexts/ToastContext";
+import { useConfirmModal } from "../components/ConfirmModal";
 import { cn } from "../lib/cn";
 
 export function ScheduledTasks() {
   const queryClient = useQueryClient();
   const toast = useToastContext();
+  const confirmModal = useConfirmModal();
   const [showAddForm, setShowAddForm] = useState(false);
   const [newTaskType, setNewTaskType] = useState("blocklist-update");
   const [newSchedule, setNewSchedule] = useState("daily");
@@ -273,13 +275,13 @@ export function ScheduledTasks() {
                           size="sm"
                           variant="outline"
                           onClick={() => {
-                            if (
-                              confirm(
-                                `Are you sure you want to delete the scheduled task "${task.taskType}"?`
-                              )
-                            ) {
-                              deleteTask.mutate(task.id);
-                            }
+                            confirmModal(
+                              `delete-task-${task.id}`,
+                              "Delete Scheduled Task",
+                              `Are you sure you want to delete the scheduled task "${task.taskType}"?`,
+                              () => deleteTask.mutate(task.id),
+                              { confirmLabel: "Delete", confirmColor: "red" }
+                            );
                           }}
                         >
                           Delete

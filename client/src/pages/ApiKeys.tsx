@@ -14,6 +14,7 @@ import {
   useDeleteApiKey,
   ApiKey,
 } from "../hooks/useApiKeys";
+import { useConfirmModal } from "../components/ConfirmModal";
 
 export function ApiKeys() {
   const [newKeyName, setNewKeyName] = useState("");
@@ -26,6 +27,7 @@ export function ApiKeys() {
   const { data: keysList, isLoading } = useApiKeys();
   const createApiKey = useCreateApiKey();
   const deleteApiKey = useDeleteApiKey();
+  const confirmModal = useConfirmModal();
 
   const handleCreate = async () => {
     if (!newKeyName.trim()) {
@@ -49,18 +51,19 @@ export function ApiKeys() {
   };
 
   const handleDelete = async (keyId: string) => {
-    if (
-      !confirm(
-        "Are you sure you want to delete this API key? This action cannot be undone."
-      )
-    ) {
-      return;
-    }
-    try {
-      await deleteApiKey.mutateAsync({ keyId });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete API key");
-    }
+    confirmModal(
+      `delete-api-key-${keyId}`,
+      "Delete API Key",
+      "Are you sure you want to delete this API key? This action cannot be undone.",
+      async () => {
+        try {
+          await deleteApiKey.mutateAsync({ keyId });
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Failed to delete API key");
+        }
+      },
+      { confirmLabel: "Delete", confirmColor: "red" }
+    );
   };
 
   if (isLoading) {

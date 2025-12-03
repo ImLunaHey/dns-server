@@ -12,10 +12,14 @@ import { SearchInput } from "../components/SearchInput";
 import { Button } from "../components/Button";
 import { api } from "../lib/api";
 import { DNSQuery } from "../lib/api";
+import { useConfirmModal } from "../components/ConfirmModal";
+import { useToastContext } from "../contexts/ToastContext";
 
 export function QueryLogPage() {
   const search = useSearch({ from: "/queries" });
   const navigate = useNavigate();
+  const toast = useToastContext();
+  const confirmModal = useConfirmModal();
   const clientIp = search.clientIp as string | undefined;
 
   const [type, setType] = useState<string>("");
@@ -165,19 +169,21 @@ export function QueryLogPage() {
             {realTimeEnabled ? "⏸ Stop Live" : "▶ Start Live"}
           </Button>
           <Button
-            onClick={async () => {
-              if (
-                confirm(
-                  "Archive queries older than 7 days? This will remove them from the active log."
-                )
-              ) {
-                try {
-                  const result = await api.archiveQueries(7, true);
-                  alert(`Archived ${result.archived} queries`);
-                } catch (error) {
-                  alert("Failed to archive queries");
-                }
-              }
+            onClick={() => {
+              confirmModal(
+                "archive-queries",
+                "Archive Queries",
+                "Archive queries older than 7 days? This will remove them from the active log.",
+                async () => {
+                  try {
+                    const result = await api.archiveQueries(7, true);
+                    toast.success(`Archived ${result.archived} queries`);
+                  } catch (error) {
+                    toast.error("Failed to archive queries");
+                  }
+                },
+                { confirmLabel: "Archive", confirmColor: "blue" }
+              );
             }}
             variant="outline"
           >
