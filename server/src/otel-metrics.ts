@@ -5,10 +5,8 @@ import {
   type ResourceMetrics,
 } from '@opentelemetry/sdk-metrics';
 import type { BatchObservableResult } from '@opentelemetry/api';
-// @ts-expect-error - resourceFromAttributes exists at runtime but types may be incomplete
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
-// Using proto exporter for protobuf encoding (required by Axiom and other backends)
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-proto';
 import { PrometheusExporter } from '@opentelemetry/exporter-prometheus';
 import { logger } from './logger.js';
@@ -92,7 +90,7 @@ class LoggingOTLPMetricExporter extends OTLPMetricExporter {
 
             metricDataPoints.push({
               name: metric.descriptor.name,
-              type: metric.descriptor.type || 'unknown',
+              type: metric.descriptor.valueType.toString() || 'unknown',
               dataPoints: dataPointCount,
             });
           }
