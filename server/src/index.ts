@@ -1544,6 +1544,7 @@ app.get('/api/settings', requireAuth, (c) => {
     upstreamDNSList: dnsServer.getUpstreamDNSList(),
     upstreamHealth: dnsServer.getUpstreamHealth(),
     dnsPort: dnsServer.getPort(),
+    dnsBindAddress: dnsServer.getBindAddress(),
     queryRetentionDays: parseInt(dbSettings.get('queryRetentionDays', '7'), 10),
     privacyMode: dbSettings.get('privacyMode', 'false') === 'true',
     rateLimitEnabled: dbSettings.get('rateLimitEnabled', 'false') === 'true',
@@ -1585,6 +1586,7 @@ app.put('/api/settings', requireAuth, async (c) => {
 
   const {
     upstreamDNS,
+    dnsBindAddress,
     queryRetentionDays,
     privacyMode,
     rateLimitEnabled,
@@ -1621,6 +1623,20 @@ app.put('/api/settings', requireAuth, async (c) => {
 
   if (upstreamDNS && typeof upstreamDNS === 'string') {
     dnsServer.setUpstreamDNS(upstreamDNS);
+  }
+
+  // Handle bind address - only update if not set via environment variable
+  if (dnsBindAddress && typeof dnsBindAddress === 'string') {
+    if (process.env.DNS_BIND_ADDRESS) {
+      logger.warn('DNS_BIND_ADDRESS is set via environment variable, ignoring API update', {
+        envValue: process.env.DNS_BIND_ADDRESS,
+        requestedValue: dnsBindAddress,
+      });
+    } else {
+      dnsServer.setBindAddress(dnsBindAddress);
+      // Note: Changing bind address requires server restart to take effect
+      logger.info('DNS bind address updated (server restart required)', { address: dnsBindAddress });
+    }
   }
 
   if (queryRetentionDays && typeof queryRetentionDays === 'number' && queryRetentionDays > 0) {

@@ -90,6 +90,7 @@ export class DNSServer {
   private port: number;
   private dotPort: number;
   private doqPort: number;
+  private bindAddress: string;
   private rateLimitEnabled: boolean = false;
   private rateLimitMaxQueries: number = 1000;
   private rateLimitWindowMs: number = 60000; // 1 minute
@@ -125,6 +126,8 @@ export class DNSServer {
       this.upstreamDNSList = ['1.1.1.1'];
     }
     this.port = parseInt(dbSettings.get('dnsPort', '53'), 10);
+    // Check environment variable first, then database setting, then default to localhost for safety
+    this.bindAddress = process.env.DNS_BIND_ADDRESS || dbSettings.get('dnsBindAddress', '127.0.0.1');
     this.rateLimitEnabled = dbSettings.get('rateLimitEnabled', 'false') === 'true';
     this.rateLimitMaxQueries = parseInt(dbSettings.get('rateLimitMaxQueries', '1000'), 10);
     this.rateLimitWindowMs = parseInt(dbSettings.get('rateLimitWindowMs', '60000'), 10);
@@ -237,7 +240,11 @@ export class DNSServer {
           return null;
         }
         // Still valid, load into memory and return
-        logger.debug('Loading cache from database into memory', { domain, type, expiresAt: new Date(dbCached.expiresAt).toISOString() });
+        logger.debug('Loading cache from database into memory', {
+          domain,
+          type,
+          expiresAt: new Date(dbCached.expiresAt).toISOString(),
+        });
         this.cache.set(key, {
           response: dbCached.response,
           expiresAt: dbCached.expiresAt,
@@ -347,7 +354,7 @@ export class DNSServer {
 
     // Persist to database
     dbCache.set(domain.toLowerCase(), type, response, expiresAt);
-    
+
     logger.debug('Cached response', { domain, type, ttl, expiresAt: new Date(expiresAt).toISOString() });
   }
 
@@ -1280,12 +1287,7 @@ export class DNSServer {
         const value = parts.slice(2).join(' ');
         const tagBytes = Buffer.from(tag, 'utf8');
         const valueBytes = Buffer.from(value, 'utf8');
-        dataBytes = Buffer.concat([
-          Buffer.from([flags & 0xff]),
-          Buffer.from([tagBytes.length]),
-          tagBytes,
-          valueBytes,
-        ]);
+        dataBytes = Buffer.concat([Buffer.from([flags & 0xff]), Buffer.from([tagBytes.length]), tagBytes, valueBytes]);
       } else {
         // Fallback: treat as raw data
         dataBytes = Buffer.from(data, 'utf8');
@@ -1338,10 +1340,7 @@ export class DNSServer {
         const selector = parseInt(parts[1], 10);
         const matchingType = parseInt(parts[2], 10);
         const certData = Buffer.from(parts[3].replace(/:/g, ''), 'hex');
-        dataBytes = Buffer.concat([
-          Buffer.from([usage & 0xff, selector & 0xff, matchingType & 0xff]),
-          certData,
-        ]);
+        dataBytes = Buffer.concat([Buffer.from([usage & 0xff, selector & 0xff, matchingType & 0xff]), certData]);
       } else {
         // Fallback: treat as raw data
         dataBytes = Buffer.from(data, 'utf8');
@@ -1365,20 +1364,11 @@ export class DNSServer {
             const valueBytes = Buffer.from(value, 'utf8');
             // SvcParam: key (length-prefixed) + value (length-prefixed)
             svcParams.push(
-              Buffer.concat([
-                Buffer.from([keyBytes.length]),
-                keyBytes,
-                Buffer.from([valueBytes.length]),
-                valueBytes,
-              ]),
+              Buffer.concat([Buffer.from([keyBytes.length]), keyBytes, Buffer.from([valueBytes.length]), valueBytes]),
             );
           }
         }
-        dataBytes = Buffer.concat([
-          Buffer.from([(priority >> 8) & 0xff, priority & 0xff]),
-          targetName,
-          ...svcParams,
-        ]);
+        dataBytes = Buffer.concat([Buffer.from([(priority >> 8) & 0xff, priority & 0xff]), targetName, ...svcParams]);
       } else {
         // Fallback: treat as raw data
         dataBytes = Buffer.from(data, 'utf8');
@@ -1587,22 +1577,22 @@ export class DNSServer {
    */
   private getQueryType(msg: Buffer): string | undefined {
     if (msg.length < 12) return undefined;
-    
+
     // Skip header (12 bytes) and question name
     let offset = 12;
     while (offset < msg.length && msg[offset] !== 0) {
       const length = msg[offset];
       offset += length + 1;
     }
-    
+
     // Skip null terminator
     if (offset >= msg.length) return undefined;
     offset++;
-    
+
     // Read QTYPE (2 bytes)
     if (offset + 2 > msg.length) return undefined;
     const qtype = msg.readUInt16BE(offset);
-    
+
     // Map numeric type to string
     const typeMap: Record<number, string> = {
       1: 'A',
@@ -1620,7 +1610,7 @@ export class DNSServer {
       65: 'HTTPS',
       257: 'CAA',
     };
-    
+
     return typeMap[qtype] || `TYPE${qtype}`;
   }
 
@@ -2256,6 +2246,24 @@ export class DNSServer {
     return this.port;
   }
 
+  getBindAddress(): string {
+    // Always check environment variable first, then return current value (defaults to 127.0.0.1)
+    return process.env.DNS_BIND_ADDRESS || this.bindAddress || '127.0.0.1';
+  }
+
+  setBindAddress(address: string) {
+    // Only update if not set via environment variable
+    if (process.env.DNS_BIND_ADDRESS) {
+      logger.warn('DNS_BIND_ADDRESS is set via environment variable, cannot update via API', {
+        envValue: process.env.DNS_BIND_ADDRESS,
+        requestedValue: address,
+      });
+      return;
+    }
+    this.bindAddress = address;
+    dbSettings.set('dnsBindAddress', address);
+  }
+
   setRateLimitEnabled(enabled: boolean) {
     this.rateLimitEnabled = enabled;
     dbSettings.set('rateLimitEnabled', enabled.toString());
@@ -2639,8 +2647,8 @@ export class DNSServer {
         reject(err);
       });
 
-      this.server.bind(this.port, () => {
-        logger.info('DNS server (UDP) running', { port: this.port });
+      this.server.bind(this.port, this.bindAddress, () => {
+        logger.info('DNS server (UDP) running', { port: this.port, address: this.bindAddress });
         resolve();
       });
     });
@@ -2659,8 +2667,8 @@ export class DNSServer {
         reject(err);
       });
 
-      this.tcpServer.listen(this.port, () => {
-        logger.info('DNS server (TCP) running', { port: this.port });
+      this.tcpServer.listen(this.port, this.bindAddress, () => {
+        logger.info('DNS server (TCP) running', { port: this.port, address: this.bindAddress });
         resolve();
       });
     });
@@ -2775,8 +2783,8 @@ export class DNSServer {
           reject(err);
         });
 
-        this.dotServer.listen(this.dotPort, () => {
-          logger.info('DNS server (DoT) running', { port: this.dotPort });
+        this.dotServer.listen(this.dotPort, this.bindAddress, () => {
+          logger.info('DNS server (DoT) running', { port: this.dotPort, address: this.bindAddress });
           resolve();
         });
       });
@@ -2948,9 +2956,11 @@ export class DNSServer {
         try {
           // Create QUIC socket for DoQ (RFC 9250)
           // DoQ uses the "doq" ALPN protocol identifier
+          // Check environment variable first, then database setting, then default to localhost for safety
+          const bindAddress = process.env.DNS_BIND_ADDRESS || dbSettings.get('dnsBindAddress', '127.0.0.1');
           this.doqServer = createQuicSocket({
             endpoint: {
-              address: '0.0.0.0',
+              address: bindAddress,
               port: doqPort,
             },
             server: {
@@ -3011,7 +3021,7 @@ export class DNSServer {
           });
 
           this.doqServer.on('ready', () => {
-            logger.info('DNS server (DoQ) running', { port: doqPort });
+            logger.info('DNS server (DoQ) running', { port: doqPort, address: bindAddress });
             resolve();
           });
 
