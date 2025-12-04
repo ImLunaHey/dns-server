@@ -847,14 +847,14 @@ app.all('/dns-query', async (c) => {
       }
 
       const body = await c.req.arrayBuffer();
-      
+
       // Validate actual body size
       if (body.byteLength > maxRequestSize) {
         return wantsJSON
           ? c.json({ error: `Request too large: ${body.byteLength} bytes (max: ${maxRequestSize} bytes)` }, 413)
           : c.text(`Request too large: ${body.byteLength} bytes (max: ${maxRequestSize} bytes)`, 413);
       }
-      
+
       dnsMessage = Buffer.from(body);
     } else if (c.req.method === 'GET') {
       // GET: DNS message in 'dns' query parameter (base64url encoded)

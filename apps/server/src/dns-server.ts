@@ -128,7 +128,25 @@ export class DNSServer {
     }
     this.port = parseInt(dbSettings.get('dnsPort', '53'), 10);
     // Check environment variable first, then database setting, then default to localhost for safety
-    this.bindAddress = process.env.DNS_BIND_ADDRESS || dbSettings.get('dnsBindAddress', '127.0.0.1');
+    const bindAddress = process.env.DNS_BIND_ADDRESS || dbSettings.get('dnsBindAddress', '127.0.0.1');
+
+    // Validate bind address
+    if (!this.isValidBindAddress(bindAddress)) {
+      logger.error('Invalid bind address', { address: bindAddress });
+      throw new Error(`Invalid bind address: ${bindAddress}`);
+    }
+
+    this.bindAddress = bindAddress;
+
+    // Security warning if binding to all interfaces without proper firewall rules
+    if (bindAddress === '0.0.0.0' || bindAddress === '::') {
+      logger.warn('DNS server binding to all interfaces (0.0.0.0/::) - ensure proper firewall rules are in place', {
+        address: bindAddress,
+        port: this.port,
+        securityNote:
+          'Binding to 0.0.0.0 exposes the DNS server to all network interfaces. Ensure firewall rules restrict access appropriately.',
+      });
+    }
     // Rate limiting enabled by default for security (can be disabled via settings)
     // Default: 1000 queries per minute per IP address
     this.rateLimitEnabled = dbSettings.get('rateLimitEnabled', 'true') === 'true';
@@ -2417,6 +2435,45 @@ export class DNSServer {
     return this.port;
   }
 
+  /**
+   * Validate bind address format
+   */
+  private isValidBindAddress(address: string): boolean {
+    if (!address || address.trim() === '') {
+      return false;
+    }
+
+    // Allow localhost variants
+    if (address === '127.0.0.1' || address === 'localhost' || address === '::1') {
+      return true;
+    }
+
+    // Allow all interfaces (with warning)
+    if (address === '0.0.0.0' || address === '::') {
+      return true;
+    }
+
+    // Validate IPv4 address
+    const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
+    if (ipv4Regex.test(address)) {
+      const parts = address.split('.');
+      return parts.every((part) => {
+        const num = parseInt(part, 10);
+        return !isNaN(num) && num >= 0 && num <= 255;
+      });
+    }
+
+    // Validate IPv6 address (simplified - allows compressed format)
+    const ipv6Regex = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/;
+    if (ipv6Regex.test(address)) {
+      return true;
+    }
+
+    // Allow hostname (basic validation)
+    const hostnameRegex = /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$/;
+    return hostnameRegex.test(address);
+  }
+
   getBindAddress(): string {
     // Always check environment variable first, then return current value (defaults to 127.0.0.1)
     return process.env.DNS_BIND_ADDRESS || this.bindAddress || '127.0.0.1';
@@ -2431,6 +2488,23 @@ export class DNSServer {
       });
       return;
     }
+
+    // Validate bind address
+    if (!this.isValidBindAddress(address)) {
+      logger.error('Invalid bind address provided', { address });
+      throw new Error(`Invalid bind address: ${address}`);
+    }
+
+    // Security warning if binding to all interfaces
+    if (address === '0.0.0.0' || address === '::') {
+      logger.warn('DNS server binding to all interfaces (0.0.0.0/::) - ensure proper firewall rules are in place', {
+        address,
+        port: this.port,
+        securityNote:
+          'Binding to 0.0.0.0 exposes the DNS server to all network interfaces. Ensure firewall rules restrict access appropriately.',
+      });
+    }
+
     this.bindAddress = address;
     dbSettings.set('dnsBindAddress', address);
   }
