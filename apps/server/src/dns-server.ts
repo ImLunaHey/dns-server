@@ -2603,6 +2603,7 @@ export class DNSServer {
 
     const queryId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     let isCached = false;
+    const querySize = msg.length; // Track query size for amplification protection
 
     let response: Buffer;
 
@@ -2762,6 +2763,44 @@ export class DNSServer {
 
     if (isCached) {
       recordCacheMetrics('hit', domain, queryType);
+    }
+
+    // Protection against DNS amplification attacks
+    // Validate response size against query size to prevent amplification
+    const responseSize = response.length;
+    const maxAmplificationRatio = 10; // Maximum allowed response-to-query ratio
+
+    // Check amplification ratio (response shouldn't be significantly larger than query)
+    const amplificationRatio = querySize > 0 ? responseSize / querySize : 0;
+
+    if (!useTcp) {
+      // For UDP, enforce strict size limit and amplification ratio
+      if (responseSize > maxUDPSize || amplificationRatio > maxAmplificationRatio) {
+        logger.warn('UDP DNS response exceeds limits, truncating to prevent amplification', {
+          clientIp,
+          domain,
+          querySize,
+          responseSize,
+          amplificationRatio: amplificationRatio.toFixed(2),
+          useTcp,
+        });
+        // Truncate response to 512 bytes (RFC 1035)
+        // Set TC (Truncated) bit to indicate response was truncated
+        const truncatedResponse = Buffer.from(response.subarray(0, maxUDPSize));
+        const flags = truncatedResponse.readUInt16BE(2);
+        truncatedResponse.writeUInt16BE(flags | 0x0200, 2); // Set TC bit
+        response = truncatedResponse;
+      }
+    } else if (amplificationRatio > maxAmplificationRatio) {
+      // For TCP, log but allow (TCP can handle larger responses)
+      logger.warn('DNS amplification detected - response significantly larger than query', {
+        clientIp,
+        domain,
+        querySize,
+        responseSize,
+        amplificationRatio: amplificationRatio.toFixed(2),
+        useTcp,
+      });
     }
 
     return response;
