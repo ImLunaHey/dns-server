@@ -962,7 +962,9 @@ export function Settings() {
                 </p>
                 <div className="mt-2 space-y-1">
                   <code className="block text-xs bg-gray-800 px-2 py-1 rounded text-gray-300">
-                    http://localhost:3001/dns-query
+                    {typeof window !== "undefined"
+                      ? `${window.location.protocol}//${window.location.host}/dns-query`
+                      : "http://localhost:3001/dns-query"}
                   </code>
                   <p className="text-xs text-gray-500 mt-1">
                     Supports both binary (RFC 8484) and JSON (Cloudflare-style)

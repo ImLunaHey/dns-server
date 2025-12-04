@@ -59,7 +59,9 @@ export function ApiKeys() {
         try {
           await deleteApiKey.mutateAsync({ keyId });
         } catch (err) {
-          setError(err instanceof Error ? err.message : "Failed to delete API key");
+          setError(
+            err instanceof Error ? err.message : "Failed to delete API key"
+          );
         }
       },
       { confirmLabel: "Delete", confirmColor: "red" }
@@ -92,14 +94,14 @@ export function ApiKeys() {
           )}
           {createdKey && (
             <Alert variant="success" className="mb-4">
-              <p className="font-semibold mb-2">API Key Created Successfully!</p>
+              <p className="font-semibold mb-2">
+                API Key Created Successfully!
+              </p>
               <p className="text-sm mb-2">
                 Save this key now - it will not be shown again:
               </p>
               <CodeBlock className="bg-white dark:bg-gray-800 border border-green-300 dark:border-green-700">
-                <div className="text-sm break-all">
-                  {createdKey}
-                </div>
+                <div className="text-sm break-all">{createdKey}</div>
               </CodeBlock>
               <Button
                 onClick={() => {
@@ -256,7 +258,11 @@ export function ApiKeys() {
             <p className="mt-2">Example with curl:</p>
             <CodeBlock>
               <div>curl -H "x-api-key: YOUR_API_KEY" \</div>
-              <div className="ml-4">http://localhost:3001/api/stats</div>
+              <div className="ml-4">
+                {typeof window !== "undefined"
+                  ? `${window.location.protocol}//${window.location.host}/api/stats`
+                  : "http://localhost:3001/api/stats"}
+              </div>
             </CodeBlock>
           </div>
         </Panel>
