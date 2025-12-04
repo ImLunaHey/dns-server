@@ -91,7 +91,7 @@ export class DNSServer {
   private dotPort: number;
   private doqPort: number;
   private bindAddress: string;
-  private rateLimitEnabled: boolean = false;
+  private rateLimitEnabled: boolean = true; // Enabled by default for security
   private rateLimitMaxQueries: number = 1000;
   private rateLimitWindowMs: number = 60000; // 1 minute
   private cache: Map<string, CachedDNSResponse> = new Map();
@@ -128,7 +128,9 @@ export class DNSServer {
     this.port = parseInt(dbSettings.get('dnsPort', '53'), 10);
     // Check environment variable first, then database setting, then default to localhost for safety
     this.bindAddress = process.env.DNS_BIND_ADDRESS || dbSettings.get('dnsBindAddress', '127.0.0.1');
-    this.rateLimitEnabled = dbSettings.get('rateLimitEnabled', 'false') === 'true';
+    // Rate limiting enabled by default for security (can be disabled via settings)
+    // Default: 1000 queries per minute per IP address
+    this.rateLimitEnabled = dbSettings.get('rateLimitEnabled', 'true') === 'true';
     this.rateLimitMaxQueries = parseInt(dbSettings.get('rateLimitMaxQueries', '1000'), 10);
     this.rateLimitWindowMs = parseInt(dbSettings.get('rateLimitWindowMs', '60000'), 10);
     this.cacheEnabled = dbSettings.get('cacheEnabled', 'true') === 'true';
