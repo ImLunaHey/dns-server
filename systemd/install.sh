@@ -813,6 +813,38 @@ if [ ! -f "$NPX_PATH" ]; then
   fi
 fi
 
+# Create dns-server user for running the service (security best practice)
+echo -e "${GREEN}Setting up dns-server user...${NC}"
+if ! id -u dns-server >/dev/null 2>&1; then
+  echo -e "${GREEN}Creating dns-server user...${NC}"
+  useradd -r -s /bin/false -d "$INSTALL_PATH" dns-server
+  echo -e "${GREEN}✓ Created dns-server user${NC}"
+else
+  echo -e "${GREEN}✓ dns-server user already exists${NC}"
+fi
+
+# Set ownership and permissions for installation directory
+echo -e "${GREEN}Setting file permissions...${NC}"
+# Make sure dns-server user owns the installation directory
+chown -R dns-server:dns-server "$INSTALL_PATH"
+# Set restrictive permissions on database files
+if [ -f "$INSTALL_PATH/apps/server/dns-queries.db" ]; then
+  chmod 600 "$INSTALL_PATH/apps/server/dns-queries.db"
+  chown dns-server:dns-server "$INSTALL_PATH/apps/server/dns-queries.db"
+  # Also set permissions on WAL and SHM files if they exist
+  [ -f "$INSTALL_PATH/apps/server/dns-queries.db-wal" ] && chmod 600 "$INSTALL_PATH/apps/server/dns-queries.db-wal" && chown dns-server:dns-server "$INSTALL_PATH/apps/server/dns-queries.db-wal"
+  [ -f "$INSTALL_PATH/apps/server/dns-queries.db-shm" ] && chmod 600 "$INSTALL_PATH/apps/server/dns-queries.db-shm" && chown dns-server:dns-server "$INSTALL_PATH/apps/server/dns-queries.db-shm"
+fi
+# Ensure .env file is readable by dns-server user
+if [ -f "$INSTALL_PATH/apps/server/.env" ]; then
+  chmod 640 "$INSTALL_PATH/apps/server/.env"
+  chown dns-server:dns-server "$INSTALL_PATH/apps/server/.env"
+fi
+# Ensure dist directory is readable
+chmod -R 755 "$INSTALL_PATH/apps/server/dist"
+chown -R dns-server:dns-server "$INSTALL_PATH/apps/server/dist"
+echo -e "${GREEN}✓ File permissions set${NC}"
+
 # Create temporary service files with correct paths
 TEMP_SERVER_SERVICE=$(mktemp)
 sed "s|/opt/dns-server|$INSTALL_PATH|g" "$SERVER_SERVICE_FILE" | \

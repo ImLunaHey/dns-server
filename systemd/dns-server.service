@@ -26,12 +26,13 @@ StartLimitBurst=5
 
 # Security settings
 # Note: Port 53 requires root or CAP_NET_BIND_SERVICE capability
-# For better security, consider using capabilities instead of running as root:
-# CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
-# AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
-# User=dns-server
-# Group=dns-server
-NoNewPrivileges=false
+# Using Linux capabilities instead of running as root for better security
+# The dns-server user must be created before enabling this service
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
+User=dns-server
+Group=dns-server
+NoNewPrivileges=true
 
 # Resource limits
 LimitNOFILE=65536
