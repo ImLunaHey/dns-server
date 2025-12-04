@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { chmodSync, existsSync } from 'fs';
 import { DNSQuery } from './dns-server.js';
 import { logger } from './logger.js';
 import { encryptSecret, decryptSecret } from './secret-encryption.js';
@@ -44,6 +45,35 @@ const dbPath = isTest
   ? join(tmpdir(), `dns-queries-test-${Date.now()}-${Math.random().toString(36).substring(7)}.db`)
   : join(process.cwd(), 'dns-queries.db');
 const db = new Database(dbPath);
+
+// Set restrictive file permissions (0600 = read/write for owner only)
+// This prevents other users from reading the database file
+if (!isTest) {
+  try {
+    // Set permissions on the database file
+    // 0o600 = rw------- (read/write for owner, no access for others)
+    if (existsSync(dbPath)) {
+      chmodSync(dbPath, 0o600);
+      logger.debug('Database file permissions set to 0600', { dbPath });
+    }
+
+    // Also set permissions on SQLite WAL and SHM files if they exist
+    const walPath = `${dbPath}-wal`;
+    const shmPath = `${dbPath}-shm`;
+    if (existsSync(walPath)) {
+      chmodSync(walPath, 0o600);
+    }
+    if (existsSync(shmPath)) {
+      chmodSync(shmPath, 0o600);
+    }
+  } catch (error) {
+    // Log warning but don't fail - permissions might not be settable in all environments
+    logger.warn('Failed to set database file permissions', {
+      dbPath,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
 
 // Create tables
 db.exec(`
