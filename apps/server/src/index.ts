@@ -696,16 +696,14 @@ function parseDNSResponseToJSON(response: Buffer, domain: string, type: string):
   return result;
 }
 
+import { getClientIp, isValidIP } from './client-ip.js';
+
 // DNS-over-HTTPS (DoH) endpoint - RFC 8484
 // Supports both binary (application/dns-message) and JSON (application/dns-json) formats
 app.all('/dns-query', async (c) => {
   try {
-    // Get client IP from request headers (standard for DoH)
-    const forwardedFor = c.req.header('x-forwarded-for');
-    const realIp = c.req.header('x-real-ip');
-    const cfConnectingIp = c.req.header('cf-connecting-ip');
-
-    const clientIp = forwardedFor?.split(',')[0]?.trim() || realIp?.trim() || cfConnectingIp?.trim() || 'unknown';
+    // Get client IP with validation and proxy trust checking
+    const clientIp = getClientIp(c);
 
     // Check if client wants JSON format
     const accept = c.req.header('accept') || '';
@@ -1551,17 +1549,26 @@ app.get('/api/ddns/update', async (c) => {
   // Use the domain associated with the token
   const domain = ddnsToken.domain;
 
-  // Get client IP from request headers (standard for DDNS services)
-  const forwardedFor = c.req.header('x-forwarded-for');
-  const realIp = c.req.header('x-real-ip');
-  const cfConnectingIp = c.req.header('cf-connecting-ip');
+  // Get client IP with validation and proxy trust checking
+  const detectedIp = getClientIp(c);
 
   // Allow explicit IP override via query params (for clients behind proxies)
-  const explicitIp = c.req.query('ip') || c.req.query('myip');
-  const explicitIpv6 = c.req.query('ipv6') || c.req.query('myipv6');
+  // Note: Explicit IP must be validated to prevent spoofing
+  const explicitIpRaw = c.req.query('ip') || c.req.query('myip');
+  const explicitIpv6Raw = c.req.query('ipv6') || c.req.query('myipv6');
 
-  // Extract client IP - prefer explicit, then headers, then connection IP
-  const detectedIp = forwardedFor?.split(',')[0]?.trim() || realIp?.trim() || cfConnectingIp?.trim();
+  // Validate explicit IPs
+  const explicitIp = explicitIpRaw && isValidIP(explicitIpRaw) ? explicitIpRaw : null;
+  const explicitIpv6 = explicitIpv6Raw && isValidIP(explicitIpv6Raw) ? explicitIpv6Raw : null;
+
+  if (explicitIpRaw && !explicitIp) {
+    logger.warn('Invalid explicit IP provided in DDNS update', {
+      clientIp: detectedIp,
+      invalidIp: explicitIpRaw,
+    });
+  }
+
+  // Extract client IP - prefer explicit (if valid), then detected IP
   const ip = explicitIp || detectedIp;
   const _ipv6 = explicitIpv6;
 

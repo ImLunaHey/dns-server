@@ -1,16 +1,7 @@
 import { Context, Next } from 'hono';
 import { auth } from './auth.js';
 import { logger } from './logger.js';
-
-/**
- * Extract client IP from request headers
- */
-function getClientIp(c: Context): string {
-  const forwardedFor = c.req.header('x-forwarded-for');
-  const realIp = c.req.header('x-real-ip');
-  const cfConnectingIp = c.req.header('cf-connecting-ip');
-  return forwardedFor?.split(',')[0]?.trim() || realIp?.trim() || cfConnectingIp?.trim() || 'unknown';
-}
+import { getClientIp } from './client-ip.js';
 
 export async function requireAuth(c: Context, next: Next) {
   const clientIp = getClientIp(c);
