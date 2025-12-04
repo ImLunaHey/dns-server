@@ -76,6 +76,39 @@ const getAllowedOrigins = (): string[] => {
 
 const allowedOrigins = getAllowedOrigins();
 
+// Enforce HTTPS in production
+app.use('/*', async (c, next) => {
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction) {
+    // Check if request is over HTTPS
+    // Support both direct HTTPS and HTTPS behind reverse proxy
+    const forwardedProto = c.req.header('x-forwarded-proto');
+    const isSecure = forwardedProto === 'https' || c.req.raw.url?.startsWith('https://');
+
+    if (!isSecure) {
+      // Redirect HTTP to HTTPS
+      const host = c.req.header('host') || c.req.header('x-forwarded-host') || 'localhost';
+      const url = c.req.url;
+      const httpsUrl = `https://${host}${url}`;
+
+      logger.warn('HTTP request redirected to HTTPS', {
+        originalUrl: url,
+        redirectUrl: httpsUrl,
+        clientIp: c.req.header('x-forwarded-for') || 'unknown',
+      });
+
+      return c.redirect(httpsUrl, 301);
+    }
+
+    // Add HSTS (HTTP Strict Transport Security) header
+    // max-age=31536000 = 1 year, includeSubDomains, preload
+    c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+  }
+
+  await next();
+});
+
 app.use(
   '/*',
   cors({
