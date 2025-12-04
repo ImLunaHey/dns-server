@@ -113,19 +113,19 @@ app.use('/*', async (c, next) => {
 app.use('/*', async (c, next) => {
   // X-Content-Type-Options: Prevent MIME type sniffing
   c.header('X-Content-Type-Options', 'nosniff');
-  
+
   // X-Frame-Options: Prevent clickjacking attacks
   c.header('X-Frame-Options', 'DENY');
-  
+
   // X-XSS-Protection: Enable XSS filtering (legacy, but still useful for older browsers)
   c.header('X-XSS-Protection', '1; mode=block');
-  
+
   // Referrer-Policy: Control referrer information
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
-  
+
   // Permissions-Policy: Restrict browser features
   c.header('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
-  
+
   // Content-Security-Policy: Restrict resource loading
   // For API endpoints, we allow same-origin and data URIs for images
   // Adjust CSP based on your frontend needs
@@ -141,7 +141,7 @@ app.use('/*', async (c, next) => {
     "form-action 'self'",
   ].join('; ');
   c.header('Content-Security-Policy', csp);
-  
+
   await next();
 });
 
@@ -834,7 +834,27 @@ app.all('/dns-query', async (c) => {
         return c.text('Content-Type must be application/dns-message', 400);
       }
 
+      // Enforce maximum request size limit (65535 bytes for TCP DNS messages)
+      const maxRequestSize = 65535;
+      const contentLength = c.req.header('content-length');
+      if (contentLength) {
+        const size = parseInt(contentLength, 10);
+        if (isNaN(size) || size > maxRequestSize) {
+          return wantsJSON
+            ? c.json({ error: `Request too large: ${size} bytes (max: ${maxRequestSize} bytes)` }, 413)
+            : c.text(`Request too large: ${size} bytes (max: ${maxRequestSize} bytes)`, 413);
+        }
+      }
+
       const body = await c.req.arrayBuffer();
+      
+      // Validate actual body size
+      if (body.byteLength > maxRequestSize) {
+        return wantsJSON
+          ? c.json({ error: `Request too large: ${body.byteLength} bytes (max: ${maxRequestSize} bytes)` }, 413)
+          : c.text(`Request too large: ${body.byteLength} bytes (max: ${maxRequestSize} bytes)`, 413);
+      }
+      
       dnsMessage = Buffer.from(body);
     } else if (c.req.method === 'GET') {
       // GET: DNS message in 'dns' query parameter (base64url encoded)
