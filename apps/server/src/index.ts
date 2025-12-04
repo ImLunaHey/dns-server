@@ -39,18 +39,71 @@ import { requireAuth } from './middleware.js';
 export const app = new Hono();
 export const dnsServer = new DNSServer();
 
-// Enable CORS for frontend
+// Enable CORS for frontend with strict origin validation
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Build allowed origins list
+const getAllowedOrigins = (): string[] => {
+  // In production, require explicit CORS_ORIGINS configuration
+  if (isProduction) {
+    const corsOrigins = process.env.CORS_ORIGINS;
+    if (!corsOrigins) {
+      logger.warn(
+        'CORS_ORIGINS not set in production. Defaulting to empty list. Set CORS_ORIGINS environment variable to allow specific origins.',
+      );
+      return [];
+    }
+    return corsOrigins
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0);
+  }
+
+  // In development, use whitelist of common development origins
+  const devOrigins = ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://127.0.0.1:5173'];
+  // Allow additional development origins from env if set
+  const devCorsOrigins = process.env.CORS_ORIGINS;
+  if (devCorsOrigins) {
+    const additionalOrigins = devCorsOrigins
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0);
+    return [...devOrigins, ...additionalOrigins];
+  }
+  return devOrigins;
+};
+
+const allowedOrigins = getAllowedOrigins();
+
 app.use(
   '/*',
   cors({
     origin: (origin) => {
-      // In development, allow any origin
-      if (process.env.NODE_ENV !== 'production') {
-        return origin || 'http://localhost:3000';
+      // Reject requests without origin (same-origin requests don't need CORS)
+      if (!origin) {
+        return null;
       }
-      // In production, use explicit allowed origins from env or default
-      const allowedOrigins = process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000'];
-      return allowedOrigins.includes(origin || '') ? origin : 'http://localhost:3000';
+
+      // Check if origin is in whitelist
+      if (allowedOrigins.includes(origin)) {
+        return origin;
+      }
+
+      // Log rejected origin for security monitoring
+      if (isProduction) {
+        logger.warn('CORS request rejected - origin not in whitelist', {
+          origin,
+          allowedOrigins,
+        });
+      } else {
+        logger.debug('CORS request rejected - origin not in development whitelist', {
+          origin,
+          allowedOrigins,
+        });
+      }
+
+      // Reject origin not in whitelist
+      return null;
     },
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
     allowHeaders: ['Content-Type', 'Authorization', 'Cookie', 'Set-Cookie', 'x-api-key'],
@@ -61,11 +114,29 @@ app.use(
 );
 
 // CORS for auth routes (as per better-auth docs)
+// Use same origin validation as main app for security
 app.use(
   '/api/auth/*',
   cors({
-    origin: '*',
-    allowHeaders: ['*'],
+    origin: (origin) => {
+      // Reject requests without origin
+      if (!origin) {
+        return null;
+      }
+      // Use same whitelist as main app
+      if (allowedOrigins.includes(origin)) {
+        return origin;
+      }
+      // Log rejected origin
+      if (isProduction) {
+        logger.warn('CORS auth request rejected - origin not in whitelist', {
+          origin,
+          allowedOrigins,
+        });
+      }
+      return null;
+    },
+    allowHeaders: ['Content-Type', 'Authorization', 'Cookie', 'Set-Cookie'],
     allowMethods: ['POST', 'GET', 'OPTIONS'],
     exposeHeaders: ['Content-Length', 'Set-Cookie'],
     maxAge: 600,
@@ -757,7 +828,10 @@ app.all('/dns-query', async (c) => {
       return c.json(jsonResponse, 200, {
         'Content-Type': 'application/dns-json',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin':
+          c.req.header('origin') && allowedOrigins.includes(c.req.header('origin') || '')
+            ? c.req.header('origin') || ''
+            : allowedOrigins[0] || '',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Accept',
       });
@@ -765,7 +839,10 @@ app.all('/dns-query', async (c) => {
       return c.body(Buffer.from(response), 200, {
         'Content-Type': 'application/dns-message',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Origin':
+          c.req.header('origin') && allowedOrigins.includes(c.req.header('origin') || '')
+            ? c.req.header('origin') || ''
+            : allowedOrigins[0] || '',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type',
       });
@@ -780,12 +857,17 @@ app.all('/dns-query', async (c) => {
 
 // OPTIONS for CORS preflight
 app.options('/dns-query', (c) => {
-  return c.text('', 200, {
-    'Access-Control-Allow-Origin': '*',
+  const requestOrigin = c.req.header('origin');
+  const corsOrigin = requestOrigin && allowedOrigins.includes(requestOrigin) ? requestOrigin : allowedOrigins[0] || null;
+  const headers: Record<string, string> = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
-  });
+  };
+  if (corsOrigin) {
+    headers['Access-Control-Allow-Origin'] = corsOrigin;
+  }
+  return c.text('', 200, headers);
 });
 
 // Public API Routes (no auth required)
