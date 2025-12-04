@@ -195,19 +195,36 @@ function verifyTSIG(message: Buffer, tsig: TSIGRecord, secret: string): boolean 
     const messageToSign = Buffer.concat([messageBeforeTSIG, tsigData.slice(0, pos)]);
 
     // Verify HMAC based on algorithm
+    // Security: Only support strong algorithms (hmac-sha256+)
+    // hmac-md5 is removed (deprecated and vulnerable)
+    // hmac-sha1 is deprecated but still allowed with warnings
     let expectedMAC: Buffer;
     if (tsig.algorithm === 'hmac-sha256' || tsig.algorithm === 'hmac-sha256.') {
       const hmac = crypto.createHmac('sha256', secret);
       hmac.update(messageToSign);
       expectedMAC = hmac.digest();
+    } else if (tsig.algorithm === 'hmac-sha384' || tsig.algorithm === 'hmac-sha384.') {
+      const hmac = crypto.createHmac('sha384', secret);
+      hmac.update(messageToSign);
+      expectedMAC = hmac.digest();
+    } else if (tsig.algorithm === 'hmac-sha512' || tsig.algorithm === 'hmac-sha512.') {
+      const hmac = crypto.createHmac('sha512', secret);
+      hmac.update(messageToSign);
+      expectedMAC = hmac.digest();
     } else if (tsig.algorithm === 'hmac-sha1' || tsig.algorithm === 'hmac-sha1.') {
+      // Deprecated: hmac-sha1 is weak and should be avoided
+      logger.warn('TSIG using deprecated weak algorithm hmac-sha1. Please migrate to hmac-sha256 or stronger', {
+        algorithm: tsig.algorithm,
+      });
       const hmac = crypto.createHmac('sha1', secret);
       hmac.update(messageToSign);
       expectedMAC = hmac.digest();
     } else if (tsig.algorithm === 'hmac-md5' || tsig.algorithm === 'hmac-md5.') {
-      const hmac = crypto.createHmac('md5', secret);
-      hmac.update(messageToSign);
-      expectedMAC = hmac.digest();
+      // Security: hmac-md5 is removed - it's deprecated and vulnerable
+      logger.error('TSIG algorithm hmac-md5 is not supported (deprecated and vulnerable). Use hmac-sha256 or stronger', {
+        algorithm: tsig.algorithm,
+      });
+      return false;
     } else {
       logger.warn('Unsupported TSIG algorithm', { algorithm: tsig.algorithm });
       return false;
