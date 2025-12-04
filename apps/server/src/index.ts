@@ -109,6 +109,42 @@ app.use('/*', async (c, next) => {
   await next();
 });
 
+// Add security headers middleware
+app.use('/*', async (c, next) => {
+  // X-Content-Type-Options: Prevent MIME type sniffing
+  c.header('X-Content-Type-Options', 'nosniff');
+  
+  // X-Frame-Options: Prevent clickjacking attacks
+  c.header('X-Frame-Options', 'DENY');
+  
+  // X-XSS-Protection: Enable XSS filtering (legacy, but still useful for older browsers)
+  c.header('X-XSS-Protection', '1; mode=block');
+  
+  // Referrer-Policy: Control referrer information
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  
+  // Permissions-Policy: Restrict browser features
+  c.header('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  
+  // Content-Security-Policy: Restrict resource loading
+  // For API endpoints, we allow same-origin and data URIs for images
+  // Adjust CSP based on your frontend needs
+  const csp = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'", // Allow inline styles for better-auth
+    "img-src 'self' data: https:",
+    "font-src 'self' data:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join('; ');
+  c.header('Content-Security-Policy', csp);
+  
+  await next();
+});
+
 // Add error handling middleware
 app.use('/*', errorHandler);
 
