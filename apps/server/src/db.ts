@@ -3,6 +3,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { DNSQuery } from './dns-server.js';
 import { logger } from './logger.js';
+import { encryptSecret, decryptSecret } from './secret-encryption.js';
 
 /**
  * Safely construct UPDATE SET clause with field validation
@@ -453,6 +454,48 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS "apiKey_userId_idx" on "apiKey" ("userId");
 `);
+
+// Migration: Encrypt existing plaintext secrets
+// This runs on every startup to migrate any remaining plaintext secrets
+try {
+  const plaintextTSIGKeys = db.prepare('SELECT id, secret FROM tsig_keys WHERE secret NOT LIKE ?').all('%:%:%') as Array<{
+    id: number;
+    secret: string;
+  }>;
+  for (const key of plaintextTSIGKeys) {
+    try {
+      const encrypted = encryptSecret(key.secret);
+      db.prepare('UPDATE tsig_keys SET secret = ? WHERE id = ?').run(encrypted, key.id);
+      logger.info('Migrated TSIG key secret to encrypted storage', { id: key.id });
+    } catch (error) {
+      logger.error('Failed to migrate TSIG key secret', {
+        id: key.id,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
+  }
+
+  const plaintextDDNSTokens = db.prepare('SELECT id, token FROM ddns_tokens WHERE token NOT LIKE ?').all('%:%:%') as Array<{
+    id: number;
+    token: string;
+  }>;
+  for (const token of plaintextDDNSTokens) {
+    try {
+      const encrypted = encryptSecret(token.token);
+      db.prepare('UPDATE ddns_tokens SET token = ? WHERE id = ?').run(encrypted, token.id);
+      logger.info('Migrated DDNS token to encrypted storage', { id: token.id });
+    } catch (error) {
+      logger.error('Failed to migrate DDNS token', {
+        id: token.id,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
+  }
+} catch (error) {
+  logger.warn('Secret migration failed (this is OK if tables do not exist yet)', {
+    error: error instanceof Error ? error : new Error(String(error)),
+  });
+}
 
 // Migrations: Add missing columns to existing tables
 try {
@@ -3245,11 +3288,13 @@ export const dbZoneKeys = {
 export const dbTSIGKeys = {
   create(name: string, algorithm: string, secret: string) {
     const now = Date.now();
+    // Encrypt secret before storing
+    const encryptedSecret = encryptSecret(secret);
     const stmt = db.prepare(`
       INSERT INTO tsig_keys (name, algorithm, secret, enabled, createdAt, updatedAt)
       VALUES (?, ?, ?, 1, ?, ?)
     `);
-    const result = stmt.run(name.toLowerCase(), algorithm, secret, now, now);
+    const result = stmt.run(name.toLowerCase(), algorithm, encryptedSecret, now, now);
     return result.lastInsertRowid as number;
   },
 
@@ -3270,12 +3315,17 @@ export const dbTSIGKeys = {
           enabled: number;
         }
       | undefined;
-    return row || null;
+    if (!row) return null;
+    // Decrypt secret when retrieving
+    return {
+      ...row,
+      secret: decryptSecret(row.secret),
+    };
   },
 
   getAll() {
     const stmt = db.prepare('SELECT * FROM tsig_keys ORDER BY name ASC');
-    return stmt.all() as Array<{
+    const rows = stmt.all() as Array<{
       id: number;
       name: string;
       algorithm: string;
@@ -3284,6 +3334,11 @@ export const dbTSIGKeys = {
       createdAt: number;
       updatedAt: number;
     }>;
+    // Decrypt secrets when retrieving (for admin display, secrets should be masked in API)
+    return rows.map((row) => ({
+      ...row,
+      secret: decryptSecret(row.secret),
+    }));
   },
 
   setEnabled(id: number, enabled: boolean) {
@@ -3341,11 +3396,13 @@ export const dbZoneTransferACLs = {
 export const dbDDNSTokens = {
   create(domain: string, token: string, recordType: string = 'A') {
     const now = Date.now();
+    // Encrypt token before storing
+    const encryptedToken = encryptSecret(token);
     const stmt = db.prepare(`
       INSERT INTO ddns_tokens (domain, token, record_type, enabled, createdAt, updatedAt)
       VALUES (?, ?, ?, 1, ?, ?)
     `);
-    const result = stmt.run(domain.toLowerCase(), token, recordType.toUpperCase(), now, now);
+    const result = stmt.run(domain.toLowerCase(), encryptedToken, recordType.toUpperCase(), now, now);
     return result.lastInsertRowid as number;
   },
 
@@ -3356,22 +3413,41 @@ export const dbDDNSTokens = {
     record_type: string;
     enabled: number;
   } | null {
-    const stmt = db.prepare('SELECT * FROM ddns_tokens WHERE token = ? AND enabled = 1');
-    const row = stmt.get(token) as
-      | {
-          id: number;
-          domain: string;
-          token: string;
-          record_type: string;
-          enabled: number;
+    // For token lookup, we need to check all tokens and decrypt them
+    // This is less efficient but necessary for security
+    const stmt = db.prepare('SELECT * FROM ddns_tokens WHERE enabled = 1');
+    const rows = stmt.all() as Array<{
+      id: number;
+      domain: string;
+      token: string;
+      record_type: string;
+      enabled: number;
+    }>;
+
+    // Decrypt and compare tokens
+    for (const row of rows) {
+      try {
+        const decryptedToken = decryptSecret(row.token);
+        if (decryptedToken === token) {
+          return {
+            ...row,
+            token: decryptedToken,
+          };
         }
-      | undefined;
-    return row || null;
+      } catch (error) {
+        // Skip rows that fail to decrypt (may be corrupted)
+        logger.warn('Failed to decrypt DDNS token', {
+          id: row.id,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
+    }
+    return null;
   },
 
   getAll() {
     const stmt = db.prepare('SELECT * FROM ddns_tokens ORDER BY domain ASC, createdAt DESC');
-    return stmt.all() as Array<{
+    const rows = stmt.all() as Array<{
       id: number;
       domain: string;
       token: string;
@@ -3380,6 +3456,25 @@ export const dbDDNSTokens = {
       createdAt: number;
       updatedAt: number;
     }>;
+    // Decrypt tokens when retrieving (for admin display, tokens should be masked in API)
+    return rows.map((row) => {
+      try {
+        return {
+          ...row,
+          token: decryptSecret(row.token),
+        };
+      } catch (error) {
+        logger.warn('Failed to decrypt DDNS token in getAll', {
+          id: row.id,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+        // Return with placeholder if decryption fails
+        return {
+          ...row,
+          token: '[DECRYPTION_ERROR]',
+        };
+      }
+    });
   },
 
   setEnabled(id: number, enabled: boolean) {
