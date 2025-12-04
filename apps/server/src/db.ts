@@ -4,6 +4,38 @@ import { tmpdir } from 'os';
 import { DNSQuery } from './dns-server.js';
 import { logger } from './logger.js';
 
+/**
+ * Safely construct UPDATE SET clause with field validation
+ * Only allows whitelisted field names to prevent SQL injection
+ */
+function buildUpdateSetClause(
+  updates: Array<{ field: string; value: unknown }>,
+  allowedFields: Set<string>,
+): { clause: string; values: unknown[] } {
+  const setParts: string[] = [];
+  const values: unknown[] = [];
+
+  for (const update of updates) {
+    // Validate field name against whitelist
+    if (!allowedFields.has(update.field)) {
+      logger.error('Attempted to update disallowed field', {
+        field: update.field,
+        allowedFields: Array.from(allowedFields),
+      });
+      throw new Error(`Invalid field name: ${update.field}`);
+    }
+
+    // Field names are validated, so safe to use in SQL
+    setParts.push(`${update.field} = ?`);
+    values.push(update.value);
+  }
+
+  return {
+    clause: setParts.join(', '),
+    values,
+  };
+}
+
 // Use temporary database for tests
 const isTest = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true';
 const dbPath = isTest
@@ -1737,27 +1769,26 @@ export const dbClientGroups = {
   },
 
   update(id: number, name?: string, description?: string) {
-    const updates: string[] = [];
-    const values: unknown[] = [];
+    const allowedFields = new Set(['name', 'description', 'updatedAt']);
+    const updates: Array<{ field: string; value: unknown }> = [];
 
     if (name !== undefined) {
-      updates.push('name = ?');
-      values.push(name);
+      updates.push({ field: 'name', value: name });
     }
     if (description !== undefined) {
-      updates.push('description = ?');
-      values.push(description);
+      updates.push({ field: 'description', value: description });
     }
 
     if (updates.length === 0) return;
 
-    updates.push('updatedAt = ?');
-    values.push(Date.now());
+    updates.push({ field: 'updatedAt', value: Date.now() });
+
+    const { clause, values } = buildUpdateSetClause(updates, allowedFields);
     values.push(id);
 
     const stmt = db.prepare(`
       UPDATE client_groups 
-      SET ${updates.join(', ')}
+      SET ${clause}
       WHERE id = ?
     `);
     stmt.run(...values);
@@ -2782,12 +2813,38 @@ export const dbZones = {
 
     if (fields.length === 0) return;
 
-    fields.push('updatedAt = ?');
-    values.push(now);
-    values.push(id);
+    // Validate and build UPDATE clause safely
+    const allowedFields = new Set([
+      'domain',
+      'enabled',
+      'soa_serial',
+      'soa_refresh',
+      'soa_retry',
+      'soa_expire',
+      'soa_minimum',
+      'soa_mname',
+      'soa_rname',
+      'updatedAt',
+    ]);
 
-    const stmt = db.prepare(`UPDATE zones SET ${fields.join(', ')} WHERE id = ?`);
-    stmt.run(...values);
+    const updateFields: Array<{ field: string; value: unknown }> = [];
+    for (let i = 0; i < fields.length; i++) {
+      // Extract field name from "field = ?" format
+      const fieldMatch = fields[i].match(/^(\w+)\s*=\s*\?$/);
+      if (!fieldMatch) {
+        logger.error('Invalid field format in zones.update', { field: fields[i] });
+        throw new Error(`Invalid field format: ${fields[i]}`);
+      }
+      updateFields.push({ field: fieldMatch[1], value: values[i] });
+    }
+
+    updateFields.push({ field: 'updatedAt', value: now });
+
+    const { clause, values: safeValues } = buildUpdateSetClause(updateFields, allowedFields);
+    safeValues.push(id);
+
+    const stmt = db.prepare(`UPDATE zones SET ${clause} WHERE id = ?`);
+    stmt.run(...safeValues);
   },
 
   delete(id: number) {
@@ -3025,12 +3082,27 @@ export const dbZoneRecords = {
 
     if (fields.length === 0) return;
 
-    fields.push('updatedAt = ?');
-    values.push(now);
-    values.push(id);
+    // Validate and build UPDATE clause safely
+    const allowedFields = new Set(['name', 'type', 'ttl', 'data', 'priority', 'enabled', 'updatedAt']);
 
-    const stmt = db.prepare(`UPDATE zone_records SET ${fields.join(', ')} WHERE id = ?`);
-    stmt.run(...values);
+    const updateFields: Array<{ field: string; value: unknown }> = [];
+    for (let i = 0; i < fields.length; i++) {
+      // Extract field name from "field = ?" format
+      const fieldMatch = fields[i].match(/^(\w+)\s*=\s*\?$/);
+      if (!fieldMatch) {
+        logger.error('Invalid field format in zone_records.update', { field: fields[i] });
+        throw new Error(`Invalid field format: ${fields[i]}`);
+      }
+      updateFields.push({ field: fieldMatch[1], value: values[i] });
+    }
+
+    updateFields.push({ field: 'updatedAt', value: now });
+
+    const { clause, values: safeValues } = buildUpdateSetClause(updateFields, allowedFields);
+    safeValues.push(id);
+
+    const stmt = db.prepare(`UPDATE zone_records SET ${clause} WHERE id = ?`);
+    stmt.run(...safeValues);
 
     // Track change for IXFR (only if not just disabling)
     if (updates.enabled === undefined || updates.enabled) {
