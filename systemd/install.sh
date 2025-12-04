@@ -694,42 +694,74 @@ elif command -v netstat &> /dev/null; then
 fi
 
 if [ "$PORT53_IN_USE" = true ]; then
-  # Check if it's our DNS server
+  # Check if it's our DNS server - use systemd as primary method
   IS_OUR_SERVER=false
   
-  # Check if it's our systemd service
-  if systemctl is-active --quiet dns-server.service 2>/dev/null; then
+  # Check if our systemd service exists or is running (most reliable method)
+  if [ -f "$SYSTEMD_SERVER_PATH" ] || systemctl is-active --quiet dns-server.service 2>/dev/null || systemctl is-enabled --quiet dns-server.service 2>/dev/null; then
     IS_OUR_SERVER=true
-    echo -e "${GREEN}Detected our DNS server is already running${NC}"
+    echo -e "${GREEN}Detected our DNS server service${NC}"
     echo -e "${GREEN}  Will stop it, update configuration, and restart it${NC}"
-  # Check if the process is node and matches our server path
-  elif [ "$PORT53_PROCESS_NAME" = "node" ] && [ -n "$PORT53_PROCESS" ]; then
-    # Try to check if it's running our server
-    PROCESS_CMD=$(ps -p "$PORT53_PROCESS" -o cmd= 2>/dev/null || echo "")
-    if echo "$PROCESS_CMD" | grep -q "dns-server.*dist/index.js" || echo "$PROCESS_CMD" | grep -q "$INSTALL_PATH/apps/server"; then
-      IS_OUR_SERVER=true
-      echo -e "${GREEN}Detected our DNS server process is running (PID: $PORT53_PROCESS)${NC}"
-      echo -e "${GREEN}  Will stop it, update configuration, and restart it${NC}"
-    fi
+  # Fallback: if it's a node process on port 53 and we're doing a re-run, assume it's ours
+  elif [ "$RE_RUN" = true ] && [ "$PORT53_PROCESS_NAME" = "node" ]; then
+    IS_OUR_SERVER=true
+    echo -e "${GREEN}Detected our DNS server (re-run detected, node process on port 53)${NC}"
+    echo -e "${GREEN}  Will stop it, update configuration, and restart it${NC}"
   fi
   
   if [ "$IS_OUR_SERVER" = true ]; then
-    # Stop our server gracefully
-    if systemctl is-active --quiet dns-server.service 2>/dev/null; then
+    # Stop our server gracefully using systemd if available
+    if systemctl is-active --quiet dns-server.service 2>/dev/null || [ -f "$SYSTEMD_SERVER_PATH" ]; then
       echo -e "${GREEN}Stopping DNS server service...${NC}"
-      systemctl stop dns-server.service
-    else
+      systemctl stop dns-server.service 2>/dev/null || true
+      
+      # Wait for the service to actually stop (with timeout)
+      echo -e "${GREEN}Waiting for service to stop...${NC}"
+      TIMEOUT=10
+      ELAPSED=0
+      while systemctl is-active --quiet dns-server.service 2>/dev/null && [ $ELAPSED -lt $TIMEOUT ]; do
+        sleep 1
+        ELAPSED=$((ELAPSED + 1))
+      done
+      
+      if systemctl is-active --quiet dns-server.service 2>/dev/null; then
+        echo -e "${YELLOW}Service still running after ${TIMEOUT}s, forcing stop...${NC}"
+        systemctl kill --signal=SIGKILL dns-server.service 2>/dev/null || true
+        sleep 1
+      fi
+    fi
+    
+    # Check if process is still running on port 53 and kill it directly if needed
+    if [ -n "$PORT53_PROCESS" ] && kill -0 "$PORT53_PROCESS" 2>/dev/null; then
       echo -e "${GREEN}Stopping DNS server process (PID: $PORT53_PROCESS)...${NC}"
       kill -TERM "$PORT53_PROCESS" 2>/dev/null || true
-      # Wait a moment for graceful shutdown
-      sleep 2
+      # Wait for graceful shutdown
+      TIMEOUT=5
+      ELAPSED=0
+      while kill -0 "$PORT53_PROCESS" 2>/dev/null && [ $ELAPSED -lt $TIMEOUT ]; do
+        sleep 1
+        ELAPSED=$((ELAPSED + 1))
+      done
       # Force kill if still running
       if kill -0 "$PORT53_PROCESS" 2>/dev/null; then
         echo -e "${YELLOW}Process still running, forcing shutdown...${NC}"
         kill -KILL "$PORT53_PROCESS" 2>/dev/null || true
+        sleep 1
       fi
     fi
-    echo -e "${GREEN}✓ DNS server stopped${NC}"
+    
+    # Verify port 53 is now free
+    if command -v lsof &> /dev/null; then
+      REMAINING_PROCESS=$(sudo lsof -i :53 -t 2>/dev/null | head -1)
+      if [ -n "$REMAINING_PROCESS" ]; then
+        echo -e "${YELLOW}Warning: Port 53 still in use by PID: $REMAINING_PROCESS${NC}"
+        echo -e "${YELLOW}  You may need to manually stop this process${NC}"
+      else
+        echo -e "${GREEN}✓ DNS server stopped and port 53 is free${NC}"
+      fi
+    else
+      echo -e "${GREEN}✓ DNS server stopped${NC}"
+    fi
   else
     # It's something else using port 53
     echo -e "${YELLOW}Warning: Process $PORT53_PROCESS_NAME (PID: $PORT53_PROCESS) is using port 53${NC}"
@@ -964,4 +996,5 @@ if [[ ! "$CADDY_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo -e "${YELLOW}Note: Caddy will automatically obtain an SSL certificate for your domain.${NC}"
   echo -e "${YELLOW}      Make sure your domain's DNS points to this server's IP address.${NC}"
 fi
+
 
