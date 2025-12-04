@@ -1,5 +1,6 @@
 import { logger } from './logger.js';
 import { dbZones, dbZoneRecords, dbZoneChanges } from './db.js';
+import { authenticateZoneTransfer } from './tsig-utils.js';
 
 // Zone transfer types
 const _AXFR = 252; // Full zone transfer
@@ -16,9 +17,32 @@ interface _ZoneRecord {
 /**
  * Handle AXFR (Full Zone Transfer) request
  * Returns all records in the zone, must be sent over TCP
+ * Requires authentication via TSIG or IP ACL
  */
-export function handleAXFR(zoneId: number, queryId: number): Buffer[] {
+export function handleAXFR(
+  zoneId: number,
+  queryId: number,
+  message: Buffer,
+  clientIp: string,
+): Buffer[] {
   try {
+    // Authenticate zone transfer request
+    const authResult = authenticateZoneTransfer(message, clientIp, zoneId);
+    if (!authResult.authenticated) {
+      logger.warn('AXFR zone transfer denied', {
+        zoneId,
+        clientIp,
+        reason: authResult.reason,
+      });
+      return [];
+    }
+
+    logger.info('AXFR zone transfer authenticated', {
+      zoneId,
+      clientIp,
+      method: authResult.method,
+    });
+
     const zone = dbZones.getById(zoneId);
     if (!zone || zone.enabled !== 1) {
       return [];
@@ -80,7 +104,13 @@ export function handleAXFR(zoneId: number, queryId: number): Buffer[] {
     );
     responses.push(finalSoaResponse);
 
-    logger.info('AXFR zone transfer completed', { zone: zone.domain, recordCount: records.length });
+    logger.info('AXFR zone transfer completed', {
+      zone: zone.domain,
+      zoneId,
+      clientIp,
+      recordCount: records.length,
+      method: authResult.method,
+    });
     return responses;
   } catch (error) {
     logger.error('Error handling AXFR', {
@@ -94,9 +124,35 @@ export function handleAXFR(zoneId: number, queryId: number): Buffer[] {
 /**
  * Handle IXFR (Incremental Zone Transfer) request
  * Returns only records that changed since the specified serial
+ * Requires authentication via TSIG or IP ACL
  */
-export function handleIXFR(zoneId: number, queryId: number, requestedSerial: number): Buffer[] {
+export function handleIXFR(
+  zoneId: number,
+  queryId: number,
+  requestedSerial: number,
+  message: Buffer,
+  clientIp: string,
+): Buffer[] {
   try {
+    // Authenticate zone transfer request
+    const authResult = authenticateZoneTransfer(message, clientIp, zoneId);
+    if (!authResult.authenticated) {
+      logger.warn('IXFR zone transfer denied', {
+        zoneId,
+        clientIp,
+        requestedSerial,
+        reason: authResult.reason,
+      });
+      return [];
+    }
+
+    logger.info('IXFR zone transfer authenticated', {
+      zoneId,
+      clientIp,
+      requestedSerial,
+      method: authResult.method,
+    });
+
     const zone = dbZones.getById(zoneId);
     if (!zone || zone.enabled !== 1) {
       return [];
@@ -128,7 +184,7 @@ export function handleIXFR(zoneId: number, queryId: number, requestedSerial: num
         changeCount: changes.length,
         reason: changes.length === 0 ? 'no changes' : 'too many changes',
       });
-      return handleAXFR(zoneId, queryId);
+      return handleAXFR(zoneId, queryId, message, clientIp);
     }
 
     const responses: Buffer[] = [];
@@ -231,10 +287,13 @@ export function handleIXFR(zoneId: number, queryId: number, requestedSerial: num
 
     logger.info('IXFR zone transfer completed', {
       zone: zone.domain,
+      zoneId,
+      clientIp,
       requestedSerial,
       currentSerial: zone.soa_serial,
       changeCount: changes.length,
       responseCount: responses.length,
+      method: authResult.method,
     });
 
     return responses;

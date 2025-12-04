@@ -2667,7 +2667,9 @@ export class DNSServer {
                       }
 
                       const transferRecords =
-                        queryType === 252 ? handleAXFR(zone.id, queryId) : handleIXFR(zone.id, queryId, requestedSerial);
+                        queryType === 252
+                          ? handleAXFR(zone.id, queryId, dnsMsg, clientIp)
+                          : handleIXFR(zone.id, queryId, requestedSerial, dnsMsg, clientIp);
 
                       // Send each record with TCP length prefix
                       for (const record of transferRecords) {

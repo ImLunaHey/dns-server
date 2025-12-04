@@ -314,6 +314,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ddns_tokens_token ON ddns_tokens(token);
   CREATE INDEX IF NOT EXISTS idx_ddns_tokens_domain ON ddns_tokens(domain);
 
+  -- Zone transfer ACLs (allowed IPs for zone transfers)
+  CREATE TABLE IF NOT EXISTS zone_transfer_acls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    zone_id INTEGER NOT NULL,
+    allowed_ip TEXT NOT NULL,
+    comment TEXT,
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    FOREIGN KEY (zone_id) REFERENCES zones(id) ON DELETE CASCADE,
+    UNIQUE(zone_id, allowed_ip)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_zone_transfer_acls_zone_id ON zone_transfer_acls(zone_id);
+  CREATE INDEX IF NOT EXISTS idx_zone_transfer_acls_ip ON zone_transfer_acls(allowed_ip);
+
   -- Upstream DNS performance metrics
   CREATE TABLE IF NOT EXISTS upstream_metrics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -429,7 +444,9 @@ try {
   }
 
   // Migrate conditional_forwarding table
-  const conditionalForwardingTableInfo = db.prepare('PRAGMA table_info(conditional_forwarding)').all() as Array<{ name: string }>;
+  const conditionalForwardingTableInfo = db.prepare('PRAGMA table_info(conditional_forwarding)').all() as Array<{
+    name: string;
+  }>;
   const conditionalForwardingColumnNames = conditionalForwardingTableInfo.map((col) => col.name);
 
   if (!conditionalForwardingColumnNames.includes('priority')) {
@@ -446,7 +463,7 @@ export const dbQueries = {
   insert(query: DNSQuery) {
     // Check privacy mode setting
     const privacyMode = dbSettings.get('privacyMode', 'false') === 'true';
-    const clientIp = privacyMode ? null : query.clientIp ?? null;
+    const clientIp = privacyMode ? null : (query.clientIp ?? null);
 
     const stmt = db.prepare(`
       INSERT INTO queries (id, domain, type, blocked, timestamp, responseTime, clientIp, blockReason, cached, rcode)
@@ -495,7 +512,7 @@ export const dbQueries = {
       blocked: row.blocked === 1,
       timestamp: row.timestamp,
       responseTime: row.responseTime ?? undefined,
-      clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
+      clientIp: privacyMode ? undefined : (row.clientIp ?? undefined),
       blockReason: row.blockReason ?? undefined,
       cached: row.cached === 1,
       rcode: row.rcode ?? undefined,
@@ -569,7 +586,7 @@ export const dbQueries = {
       blocked: row.blocked === 1,
       timestamp: row.timestamp,
       responseTime: row.responseTime ?? undefined,
-      clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
+      clientIp: privacyMode ? undefined : (row.clientIp ?? undefined),
       blockReason: row.blockReason ?? undefined,
       cached: row.cached === 1,
       rcode: row.rcode ?? undefined,
@@ -691,7 +708,7 @@ export const dbQueries = {
       blocked: row.blocked === 1,
       timestamp: row.timestamp,
       responseTime: row.responseTime ?? undefined,
-      clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
+      clientIp: privacyMode ? undefined : (row.clientIp ?? undefined),
       blockReason: row.blockReason ?? undefined,
       cached: row.cached === 1,
       rcode: row.rcode ?? undefined,
@@ -800,7 +817,7 @@ export const dbQueries = {
       blocked: row.blocked === 1,
       timestamp: row.timestamp,
       responseTime: row.responseTime ?? undefined,
-      clientIp: privacyMode ? undefined : row.clientIp ?? undefined,
+      clientIp: privacyMode ? undefined : (row.clientIp ?? undefined),
       blockReason: row.blockReason ?? undefined,
       cached: row.cached === 1,
       rcode: row.rcode ?? undefined,
@@ -1300,12 +1317,14 @@ export const dbQueries = {
       GROUP BY type
       ORDER BY totalQueries DESC
     `);
-    const byType = (byTypeStmt.all(startTime) as Array<{
-      type: string;
-      totalQueries: number;
-      cacheHits: number;
-      cacheMisses: number;
-    }>).map((row) => ({
+    const byType = (
+      byTypeStmt.all(startTime) as Array<{
+        type: string;
+        totalQueries: number;
+        cacheHits: number;
+        cacheMisses: number;
+      }>
+    ).map((row) => ({
       type: row.type,
       totalQueries: row.totalQueries,
       cacheHits: row.cacheHits,
@@ -1328,12 +1347,14 @@ export const dbQueries = {
       ORDER BY cacheHits DESC
       LIMIT 20
     `);
-    const topCacheHits = (topCacheHitsStmt.all(startTime) as Array<{
-      domain: string;
-      totalQueries: number;
-      cacheHits: number;
-      cacheMisses: number;
-    }>).map((row) => ({
+    const topCacheHits = (
+      topCacheHitsStmt.all(startTime) as Array<{
+        domain: string;
+        totalQueries: number;
+        cacheHits: number;
+        cacheMisses: number;
+      }>
+    ).map((row) => ({
       domain: row.domain,
       totalQueries: row.totalQueries,
       cacheHits: row.cacheHits,
@@ -1355,12 +1376,14 @@ export const dbQueries = {
       ORDER BY cacheMisses DESC
       LIMIT 20
     `);
-    const topCacheMisses = (topCacheMissesStmt.all(startTime) as Array<{
-      domain: string;
-      totalQueries: number;
-      cacheHits: number;
-      cacheMisses: number;
-    }>).map((row) => ({
+    const topCacheMisses = (
+      topCacheMissesStmt.all(startTime) as Array<{
+        domain: string;
+        totalQueries: number;
+        cacheHits: number;
+        cacheMisses: number;
+      }>
+    ).map((row) => ({
       domain: row.domain,
       totalQueries: row.totalQueries,
       cacheHits: row.cacheHits,
@@ -1380,12 +1403,14 @@ export const dbQueries = {
       GROUP BY hour
       ORDER BY hour ASC
     `);
-    const hourly = (hourlyStmt.all(startTime, startTime) as Array<{
-      hour: number;
-      totalQueries: number;
-      cacheHits: number;
-      cacheMisses: number;
-    }>).map((row) => ({
+    const hourly = (
+      hourlyStmt.all(startTime, startTime) as Array<{
+        hour: number;
+        totalQueries: number;
+        cacheHits: number;
+        cacheMisses: number;
+      }>
+    ).map((row) => ({
       hour: row.hour,
       totalQueries: row.totalQueries,
       cacheHits: row.cacheHits,
@@ -1503,10 +1528,13 @@ export const dbClientNames = {
   getAll(): Record<string, string> {
     const stmt = db.prepare('SELECT clientIp, name FROM client_names');
     const rows = stmt.all() as Array<{ clientIp: string; name: string }>;
-    return rows.reduce((acc, row) => {
-      acc[row.clientIp] = row.name;
-      return acc;
-    }, {} as Record<string, string>);
+    return rows.reduce(
+      (acc, row) => {
+        acc[row.clientIp] = row.name;
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
   },
 
   delete(clientIp: string) {
@@ -1642,10 +1670,13 @@ export const dbSettings = {
   getAll(): Record<string, string> {
     const stmt = db.prepare('SELECT key, value FROM settings');
     const rows = stmt.all() as Array<{ key: string; value: string }>;
-    return rows.reduce((acc, row) => {
-      acc[row.key] = row.value;
-      return acc;
-    }, {} as Record<string, string>);
+    return rows.reduce(
+      (acc, row) => {
+        acc[row.key] = row.value;
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
   },
 };
 
@@ -2321,10 +2352,13 @@ export const dbClientUpstreamDNS = {
   getAll(): Record<string, string> {
     const stmt = db.prepare('SELECT clientIp, upstreamDNS FROM client_upstream_dns');
     const rows = stmt.all() as Array<{ clientIp: string; upstreamDNS: string }>;
-    return rows.reduce((acc, row) => {
-      acc[row.clientIp] = row.upstreamDNS;
-      return acc;
-    }, {} as Record<string, string>);
+    return rows.reduce(
+      (acc, row) => {
+        acc[row.clientIp] = row.upstreamDNS;
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
   },
 };
 
@@ -2856,7 +2890,7 @@ export const dbZoneRecords = {
   create(zoneId: number, name: string, type: string, ttl: number, data: string, priority?: number) {
     // Increment serial first to get the new serial for change tracking
     const newSerial = dbZones.incrementSerial(zoneId);
-    
+
     const now = Date.now();
     const stmt = db.prepare(`
       INSERT INTO zone_records (zone_id, name, type, ttl, data, priority, createdAt, updatedAt)
@@ -2864,10 +2898,19 @@ export const dbZoneRecords = {
     `);
     const result = stmt.run(zoneId, name.toLowerCase(), type.toUpperCase(), ttl, data, priority ?? null, now, now);
     const recordId = result.lastInsertRowid as number;
-    
+
     // Track change for IXFR with the new serial
-    dbZoneChanges.recordAdd(zoneId, newSerial, recordId, name.toLowerCase(), type.toUpperCase(), ttl, data, priority ?? null);
-    
+    dbZoneChanges.recordAdd(
+      zoneId,
+      newSerial,
+      recordId,
+      name.toLowerCase(),
+      type.toUpperCase(),
+      ttl,
+      data,
+      priority ?? null,
+    );
+
     return recordId;
   },
 
@@ -3013,7 +3056,16 @@ export const dbZoneRecords = {
     stmt.run(id);
 
     // Track change for IXFR with the new serial
-    dbZoneChanges.recordDelete(existing.zone_id, newSerial, id, existing.name, existing.type, existing.ttl, existing.data, existing.priority);
+    dbZoneChanges.recordDelete(
+      existing.zone_id,
+      newSerial,
+      id,
+      existing.name,
+      existing.type,
+      existing.ttl,
+      existing.data,
+      existing.priority,
+    );
   },
 
   deleteByZone(zoneId: number) {
@@ -3170,6 +3222,47 @@ export const dbTSIGKeys = {
   delete(id: number) {
     const stmt = db.prepare('DELETE FROM tsig_keys WHERE id = ?');
     stmt.run(id);
+  },
+};
+
+export const dbZoneTransferACLs = {
+  add(zoneId: number, allowedIp: string, comment?: string) {
+    const now = Date.now();
+    const stmt = db.prepare(`
+      INSERT INTO zone_transfer_acls (zone_id, allowed_ip, comment, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    const result = stmt.run(zoneId, allowedIp, comment || null, now, now);
+    return result.lastInsertRowid as number;
+  },
+
+  remove(zoneId: number, allowedIp: string) {
+    const stmt = db.prepare('DELETE FROM zone_transfer_acls WHERE zone_id = ? AND allowed_ip = ?');
+    stmt.run(zoneId, allowedIp);
+  },
+
+  getAll(zoneId: number) {
+    const stmt = db.prepare('SELECT * FROM zone_transfer_acls WHERE zone_id = ? ORDER BY allowed_ip ASC');
+    return stmt.all(zoneId) as Array<{
+      id: number;
+      zone_id: number;
+      allowed_ip: string;
+      comment: string | null;
+      createdAt: number;
+      updatedAt: number;
+    }>;
+  },
+
+  isAllowed(zoneId: number, clientIp: string): boolean {
+    const stmt = db.prepare('SELECT COUNT(*) as count FROM zone_transfer_acls WHERE zone_id = ? AND allowed_ip = ?');
+    const result = stmt.get(zoneId, clientIp) as { count: number };
+    return result.count > 0;
+  },
+
+  hasAnyACL(zoneId: number): boolean {
+    const stmt = db.prepare('SELECT COUNT(*) as count FROM zone_transfer_acls WHERE zone_id = ?');
+    const result = stmt.get(zoneId) as { count: number };
+    return result.count > 0;
   },
 };
 
