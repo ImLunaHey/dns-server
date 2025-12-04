@@ -2605,7 +2605,11 @@ export const dbScheduledTasks = {
 };
 
 export const dbRateLimits = {
-  checkRateLimit(clientIp: string, maxQueries: number, windowMs: number): { allowed: boolean; remaining: number } {
+  checkRateLimit(
+    clientIp: string,
+    maxQueries: number,
+    windowMs: number,
+  ): { allowed: boolean; remaining: number; queryCount: number } {
     const now = Date.now();
     const windowStart = Math.floor(now / windowMs) * windowMs;
 
@@ -2622,11 +2626,11 @@ export const dbRateLimits = {
         ON CONFLICT(clientIp) DO UPDATE SET queryCount = 1, windowStart = ?, blocked = 0
       `);
       insertStmt.run(clientIp, windowStart, windowStart);
-      return { allowed: true, remaining: maxQueries - 1 };
+      return { allowed: true, remaining: maxQueries - 1, queryCount: 1 };
     }
 
     if (row.blocked === 1) {
-      return { allowed: false, remaining: 0 };
+      return { allowed: false, remaining: 0, queryCount: row.queryCount };
     }
 
     const newCount = row.queryCount + 1;
@@ -2636,11 +2640,11 @@ export const dbRateLimits = {
 
     if (newCount > maxQueries) {
       updateStmt.run(newCount, 1, clientIp);
-      return { allowed: false, remaining: 0 };
+      return { allowed: false, remaining: 0, queryCount: newCount };
     }
 
     updateStmt.run(newCount, 0, clientIp);
-    return { allowed: true, remaining: maxQueries - newCount };
+    return { allowed: true, remaining: maxQueries - newCount, queryCount: newCount };
   },
 
   unblock(clientIp: string) {

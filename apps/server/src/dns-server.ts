@@ -2521,7 +2521,14 @@ export class DNSServer {
       const rateLimitResult = dbRateLimits.checkRateLimit(clientIp, this.rateLimitMaxQueries, this.rateLimitWindowMs);
       if (!rateLimitResult.allowed) {
         // Rate limited - return NXDOMAIN
-        logger.warn('Rate limited', { clientIp });
+        logger.warn('Rate limit violation', {
+          clientIp,
+          domain,
+          queryType: type,
+          limit: this.rateLimitMaxQueries,
+          windowMs: this.rateLimitWindowMs,
+          queryCount: rateLimitResult.queryCount,
+        });
         recordRateLimitMetrics(clientIp, true);
         return this.createDNSResponse(msg, true);
       }

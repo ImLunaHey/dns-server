@@ -74,7 +74,7 @@ function parseTSIG(message: Buffer, offset: number): TSIGRecord | null {
     algOffset += 10;
 
     if (algOffset + macSize > message.length) return null;
-    const mac = message.slice(algOffset, algOffset + macSize);
+    const mac = message.subarray(algOffset, algOffset + macSize);
     algOffset += macSize;
 
     if (algOffset + 6 > message.length) return null;
@@ -85,7 +85,7 @@ function parseTSIG(message: Buffer, offset: number): TSIGRecord | null {
 
     const otherData =
       otherLen > 0 && algOffset + otherLen <= message.length
-        ? message.slice(algOffset, algOffset + otherLen)
+        ? message.subarray(algOffset, algOffset + otherLen)
         : Buffer.alloc(0);
 
     return {
@@ -134,7 +134,7 @@ function verifyTSIG(message: Buffer, tsig: TSIGRecord, secret: string): boolean 
     tsigOffset++; // Skip null terminator
 
     // Message to verify is everything before TSIG, plus TSIG data (without MAC)
-    const messageBeforeTSIG = message.slice(0, tsigOffset);
+    const messageBeforeTSIG = message.subarray(0, tsigOffset);
 
     // Build TSIG data for signing (without MAC)
     const tsigData = Buffer.alloc(tsig.name.length + 2 + tsig.algorithm.length + 2 + 18);
@@ -192,7 +192,7 @@ function verifyTSIG(message: Buffer, tsig: TSIGRecord, secret: string): boolean 
     tsigData.writeUInt16BE(dataLength, dataStart - 2);
 
     // Build message for HMAC
-    const messageToSign = Buffer.concat([messageBeforeTSIG, tsigData.slice(0, pos)]);
+    const messageToSign = Buffer.concat([messageBeforeTSIG, tsigData.subarray(0, pos)]);
 
     // Verify HMAC based on algorithm
     // Security: Only support strong algorithms (hmac-sha256+)
@@ -244,16 +244,28 @@ function verifyTSIG(message: Buffer, tsig: TSIGRecord, secret: string): boolean 
 /**
  * Handle DNS UPDATE request (RFC 2136)
  */
-export function handleDNSUpdate(message: Buffer, _clientIp: string): Buffer | null {
+export function handleDNSUpdate(message: Buffer, clientIp: string): Buffer | null {
   try {
-    if (message.length < 12) return null;
+    if (message.length < 12) {
+      logger.warn('DNS UPDATE request too short', { clientIp, messageLength: message.length });
+      return null;
+    }
 
     const id = message.readUInt16BE(0);
     const flags = message.readUInt16BE(2);
     const opcode = (flags >> 11) & 0xf;
 
     // Check if it's an UPDATE request
-    if (opcode !== UPDATE_OPCODE) return null;
+    if (opcode !== UPDATE_OPCODE) {
+      return null;
+    }
+
+    // Log DNS UPDATE attempt
+    logger.info('DNS UPDATE request received', {
+      clientIp,
+      queryId: id,
+      messageLength: message.length,
+    });
 
     // Parse zones (prerequisite section)
     let offset = 12;
@@ -272,12 +284,21 @@ export function handleDNSUpdate(message: Buffer, _clientIp: string): Buffer | nu
     }
 
     if (zones.length === 0) {
+      logger.warn('DNS UPDATE request rejected: no zones specified', {
+        clientIp,
+        queryId: id,
+      });
       return createUpdateResponse(id, 1); // FORMERR
     }
 
     const zone = zones[0];
     const zoneRecord = dbZones.findZoneForDomain(zone.name);
     if (!zoneRecord) {
+      logger.warn('DNS UPDATE request rejected: zone not found', {
+        clientIp,
+        queryId: id,
+        zone: zone.name,
+      });
       return createUpdateResponse(id, 3); // NXDOMAIN
     }
 
@@ -299,16 +320,36 @@ export function handleDNSUpdate(message: Buffer, _clientIp: string): Buffer | nu
     }
 
     if (!tsig) {
+      logger.warn('DNS UPDATE request rejected: TSIG required', {
+        clientIp,
+        queryId: id,
+        zone: zone.name,
+        zoneId: zoneRecord.id,
+      });
       return createUpdateResponse(id, 9); // NOTAUTH - TSIG required
     }
 
     // Verify TSIG
     const tsigKey = dbTSIGKeys.getByName(tsig.name);
     if (!tsigKey) {
+      logger.warn('DNS UPDATE request rejected: unknown TSIG key', {
+        clientIp,
+        queryId: id,
+        zone: zone.name,
+        zoneId: zoneRecord.id,
+        tsigName: tsig.name,
+      });
       return createUpdateResponse(id, 9); // NOTAUTH - Unknown key
     }
 
     if (!verifyTSIG(message, tsig, tsigKey.secret)) {
+      logger.warn('DNS UPDATE request rejected: invalid TSIG signature', {
+        clientIp,
+        queryId: id,
+        zone: zone.name,
+        zoneId: zoneRecord.id,
+        tsigName: tsig.name,
+      });
       return createUpdateResponse(id, 9); // NOTAUTH - Invalid signature
     }
 
@@ -350,7 +391,7 @@ export function handleDNSUpdate(message: Buffer, _clientIp: string): Buffer | nu
         }
         data = parts.join(':');
       } else {
-        data = message.slice(offset, offset + dataLength).toString('utf8');
+        data = message.subarray(offset, offset + dataLength).toString('utf8');
       }
       offset += dataLength;
       updates.push({ name: nameResult.name, type, ttl, data });
@@ -380,11 +421,25 @@ export function handleDNSUpdate(message: Buffer, _clientIp: string): Buffer | nu
     }
 
     // Update SOA serial
-    dbZones.update(zoneRecord.id, { soa_serial: zoneRecord.soa_serial + 1 });
+    const newSerial = zoneRecord.soa_serial + 1;
+    dbZones.update(zoneRecord.id, { soa_serial: newSerial });
+
+    // Log successful DNS UPDATE
+    logger.info('DNS UPDATE request successful', {
+      clientIp,
+      queryId: id,
+      zone: zone.name,
+      zoneId: zoneRecord.id,
+      tsigName: tsig.name,
+      updateCount: updates.length,
+      newSerial,
+      updates: updates.map((u) => ({ name: u.name, type: u.type, data: u.data })),
+    });
 
     return createUpdateResponse(id, 0); // NOERROR
   } catch (error) {
     logger.error('Error handling DNS UPDATE', {
+      clientIp,
       error: error instanceof Error ? error : new Error(String(error)),
     });
     return null;
