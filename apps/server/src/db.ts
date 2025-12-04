@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { DNSQuery } from './dns-server.js';
 import { logger } from './logger.js';
 import { encryptSecret, decryptSecret } from './secret-encryption.js';
+import { safeRegexTestSync } from './regex-utils.js';
 
 /**
  * Safely construct UPDATE SET clause with field validation
@@ -1965,12 +1966,7 @@ export const dbRegexFilters = {
   },
 
   testPattern(pattern: string, domain: string): boolean {
-    try {
-      const regex = new RegExp(pattern);
-      return regex.test(domain);
-    } catch {
-      return false;
-    }
+    return safeRegexTestSync(pattern, domain);
   },
 };
 

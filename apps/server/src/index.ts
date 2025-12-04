@@ -35,6 +35,7 @@ import {
 import db from './db.js';
 import { auth } from './auth.js';
 import { requireAuth } from './middleware.js';
+import { validateRegexPattern } from './regex-utils.js';
 
 export const app = new Hono();
 export const dnsServer = new DNSServer();
@@ -1301,11 +1302,10 @@ app.post('/api/regex-filters', requireAuth, async (c) => {
     return c.json({ error: 'Type must be "block" or "allow"' }, 400);
   }
 
-  // Validate regex pattern
-  try {
-    new RegExp(pattern);
-  } catch (error) {
-    return c.json({ error: 'Invalid regex pattern' }, 400);
+  // Validate regex pattern with ReDoS protection
+  const validation = validateRegexPattern(pattern);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid regex pattern' }, 400);
   }
 
   dbRegexFilters.add(pattern, type, comment);

@@ -31,6 +31,7 @@ import { signRRset, generateDNSKEYRecord } from './dnssec-signer.js';
 import { handleDNSUpdate } from './ddns-handler.js';
 import { handleAXFR, handleIXFR } from './zone-transfer-handler.js';
 import { recordDNSQuery, recordCacheMetrics, recordUpstreamMetrics, recordRateLimitMetrics } from './otel-metrics.js';
+import { safeRegexTestSync } from './regex-utils.js';
 
 export interface DNSQuery {
   id: string;
@@ -736,26 +737,18 @@ export class DNSServer {
     // Check regex allow filters first
     const regexAllowFilters = dbRegexFilters.getEnabled().filter((f) => f.type === 'allow');
     for (const filter of regexAllowFilters) {
-      try {
-        const regex = new RegExp(filter.pattern);
-        if (regex.test(lower)) {
-          return { blocked: false }; // Domain matches allow regex, don't block
-        }
-      } catch {
-        // Invalid regex, skip
+      const match = safeRegexTestSync(filter.pattern, lower);
+      if (match) {
+        return { blocked: false }; // Domain matches allow regex, don't block
       }
     }
 
     // Check regex block filters
     const regexBlockFilters = dbRegexFilters.getEnabled().filter((f) => f.type === 'block');
     for (const filter of regexBlockFilters) {
-      try {
-        const regex = new RegExp(filter.pattern);
-        if (regex.test(lower)) {
-          return { blocked: true, reason: 'regex-filter' }; // Domain matches block regex, block it
-        }
-      } catch {
-        // Invalid regex, skip
+      const match = safeRegexTestSync(filter.pattern, lower);
+      if (match) {
+        return { blocked: true, reason: 'regex-filter' }; // Domain matches block regex, block it
       }
     }
 
