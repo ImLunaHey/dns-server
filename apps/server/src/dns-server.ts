@@ -1981,12 +1981,25 @@ export class DNSServer {
         const host = urlMatch[1];
         const port = urlMatch[2] ? parseInt(urlMatch[2], 10) : 853;
 
+        // Get TLS verification setting for upstream DoT connections
+        // Default to true (secure) unless explicitly disabled
+        const upstreamDotRejectUnauthorizedEnv = process.env.UPSTREAM_DOT_REJECT_UNAUTHORIZED;
+        const upstreamDotRejectUnauthorized = upstreamDotRejectUnauthorizedEnv
+          ? upstreamDotRejectUnauthorizedEnv.toLowerCase() === 'true'
+          : dbSettings.get('upstreamDotRejectUnauthorized', 'true') === 'true';
+
+        if (!upstreamDotRejectUnauthorized) {
+          logger.warn(
+            `TLS certificate verification is disabled for upstream DoT connection to ${host}:${port}. This reduces security and should only be used for testing with self-signed certificates.`,
+          );
+        }
+
         // Create TLS connection
         const socket = tls.connect(
           {
             host,
             port,
-            rejectUnauthorized: true, // Verify server certificate
+            rejectUnauthorized: upstreamDotRejectUnauthorized, // Verify server certificate
             servername: host, // SNI
           },
           () => {
@@ -3209,10 +3222,25 @@ export class DNSServer {
 
       logger.debug('Using TLS certificates', { certPath, keyPath });
 
+      // Get TLS verification setting from environment or database
+      // Default to true (secure) unless explicitly disabled
+      const dotRejectUnauthorizedEnv = process.env.DOT_REJECT_UNAUTHORIZED;
+      const dotRejectUnauthorized = dotRejectUnauthorizedEnv
+        ? dotRejectUnauthorizedEnv.toLowerCase() === 'true'
+        : dbSettings.get('dotRejectUnauthorized', 'true') === 'true';
+
+      if (!dotRejectUnauthorized) {
+        logger.warn(
+          'TLS certificate verification is disabled for DoT server. This reduces security and should only be used for testing with self-signed certificates.',
+        );
+      }
+
       const tlsOptions = {
         cert: fs.readFileSync(certPath),
         key: fs.readFileSync(keyPath),
-        rejectUnauthorized: false, // Allow self-signed certs for now
+        // Note: rejectUnauthorized is a client-side option and doesn't apply to TLS servers
+        // This is kept for documentation and potential future client connections
+        rejectUnauthorized: dotRejectUnauthorized,
       };
 
       return new Promise<void>((resolve, reject) => {
