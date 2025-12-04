@@ -199,18 +199,41 @@ function createDNSQueryFromParams(domain: string, type: string, dnssecOK: boolea
   return query;
 }
 
-// Helper function to parse domain name from DNS response
-function parseDomainName(response: Buffer, offset: number): { name: string; newOffset: number } {
+// Helper function to parse domain name from DNS response with strict validation
+function parseDomainName(
+  response: Buffer,
+  offset: number,
+  visitedOffsets: Set<number> = new Set(),
+  depth: number = 0,
+): { name: string; newOffset: number } {
+  const maxDepth = 10; // Maximum compression pointer depth
+  const maxLabels = 128; // Maximum number of labels
+  const maxDomainLength = 255; // RFC 1035: domain names max 255 bytes
+
+  if (depth > maxDepth) {
+    logger.warn('Compression pointer depth exceeded in parseDomainName', { depth, offset });
+    return { name: '.', newOffset: offset };
+  }
+
   const nameParts: string[] = [];
   let currentOffset = offset;
-  const visitedOffsets = new Set<number>();
+  let labelCount = 0;
 
-  while (currentOffset < response.length) {
+  while (currentOffset < response.length && labelCount < maxLabels) {
+    // Prevent compression pointer loops
     if (visitedOffsets.has(currentOffset)) {
-      // Prevent infinite loops from compression pointers
+      logger.warn('Compression pointer loop detected in parseDomainName', {
+        currentOffset,
+        visited: Array.from(visitedOffsets),
+      });
       break;
     }
     visitedOffsets.add(currentOffset);
+
+    // Validate we have at least 1 byte
+    if (currentOffset >= response.length) {
+      break;
+    }
 
     const length = response[currentOffset];
 
@@ -221,22 +244,54 @@ function parseDomainName(response: Buffer, offset: number): { name: string; newO
 
     // Compression pointer
     if ((length & 0xc0) === 0xc0) {
+      // Validate we have 2 bytes for compression pointer
+      if (currentOffset + 1 >= response.length) {
+        break;
+      }
       const pointer = ((length & 0x3f) << 8) | response[currentOffset + 1];
-      if (pointer >= response.length) break;
+      // Validate pointer is within message and points to valid location (after header)
+      if (pointer >= response.length || pointer < 12) {
+        logger.warn('Invalid compression pointer in parseDomainName', {
+          currentOffset,
+          pointer,
+          responseLength: response.length,
+        });
+        break;
+      }
+      // Prevent following compression pointer if we've already visited it
+      if (visitedOffsets.has(pointer)) {
+        logger.warn('Compression pointer loop detected', { currentOffset, pointer });
+        break;
+      }
       currentOffset += 2;
-      // Follow compression pointer
-      const decompressed = parseDomainName(response, pointer);
+      // Recursively follow compression pointer
+      const decompressed = parseDomainName(response, pointer, visitedOffsets, depth + 1);
       nameParts.push(...decompressed.name.split('.'));
       break;
     }
 
-    // Regular label
-    if (currentOffset + 1 + length > response.length) break;
+    // Validate label length (RFC 1035: labels max 63 bytes)
+    if (length > 63) {
+      logger.warn('Invalid label length in parseDomainName', { currentOffset, length });
+      break;
+    }
+
+    // Regular label - validate we have enough bytes
+    if (currentOffset + 1 + length > response.length) {
+      break;
+    }
     nameParts.push(response.toString('utf8', currentOffset + 1, currentOffset + 1 + length));
     currentOffset += length + 1;
+    labelCount++;
   }
 
   const name = nameParts.join('.');
+  // Validate total domain name length
+  if (name.length > maxDomainLength) {
+    logger.warn('Domain name exceeds maximum length in parseDomainName', { nameLength: name.length });
+    return { name: '.', newOffset: currentOffset };
+  }
+
   return { name: name || '.', newOffset: currentOffset };
 }
 
@@ -657,15 +712,32 @@ app.all('/dns-query', async (c) => {
       return c.text('Method not allowed', 405);
     }
 
-    // Validate DNS message size
-    if (dnsMessage.length > 65535) {
-      return wantsJSON ? c.json({ error: 'DNS message too large' }, 400) : c.text('DNS message too large', 400);
-    }
+    // Strict DNS message size validation
+    // UDP DNS messages should be 512 bytes or less (RFC 1035)
+    // TCP DNS messages can be up to 65535 bytes (RFC 1035)
+    // For DoH, we use TCP limits since it's over HTTP
+    const maxUDPSize = 512;
+    const maxTCPSize = 65535;
+    const maxSize = maxTCPSize; // DoH uses TCP semantics
 
     if (dnsMessage.length < 12) {
       return wantsJSON
-        ? c.json({ error: 'DNS message too short' }, 400)
+        ? c.json({ error: 'DNS message too short (minimum 12 bytes for DNS header)' }, 400)
         : c.text('DNS message too short (minimum 12 bytes for DNS header)', 400);
+    }
+
+    if (dnsMessage.length > maxSize) {
+      return wantsJSON
+        ? c.json({ error: `DNS message too large: ${dnsMessage.length} bytes (max: ${maxSize} bytes)` }, 400)
+        : c.text(`DNS message too large: ${dnsMessage.length} bytes (max: ${maxSize} bytes)`, 400);
+    }
+
+    // Warn if UDP-sized message exceeds 512 bytes (should use TCP)
+    if (dnsMessage.length > maxUDPSize) {
+      logger.debug('DoH message exceeds UDP size limit, should use TCP', {
+        size: dnsMessage.length,
+        maxUDPSize,
+      });
     }
 
     // Basic DNS header validation

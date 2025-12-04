@@ -391,35 +391,100 @@ export function handleDNSUpdate(message: Buffer, _clientIp: string): Buffer | nu
   }
 }
 
-function parseDomainName(message: Buffer, offset: number): { name: string; newOffset: number } | null {
+function parseDomainName(
+  message: Buffer,
+  offset: number,
+  visited: Set<number> = new Set(),
+  depth: number = 0,
+): { name: string; newOffset: number } | null {
+  const maxDepth = 10; // Maximum compression pointer depth
+  const maxLabels = 128; // Maximum number of labels
+  const maxDomainLength = 255; // RFC 1035: domain names max 255 bytes
+
+  if (depth > maxDepth) {
+    logger.warn('Compression pointer depth exceeded in DDNS parseDomainName', { depth, offset });
+    return null;
+  }
+
   const parts: string[] = [];
   let currentOffset = offset;
-  const visited = new Set<number>();
+  let labelCount = 0;
 
-  while (currentOffset < message.length) {
-    if (visited.has(currentOffset)) break;
+  while (currentOffset < message.length && labelCount < maxLabels) {
+    // Prevent compression pointer loops
+    if (visited.has(currentOffset)) {
+      logger.warn('Compression pointer loop detected in DDNS parseDomainName', {
+        currentOffset,
+        visited: Array.from(visited),
+      });
+      return null;
+    }
     visited.add(currentOffset);
+
+    // Validate we have at least 1 byte
+    if (currentOffset >= message.length) {
+      return null;
+    }
 
     const length = message[currentOffset];
     if (length === 0) {
       currentOffset++;
       break;
     }
+
+    // Compression pointer
     if ((length & 0xc0) === 0xc0) {
+      // Validate we have 2 bytes for compression pointer
+      if (currentOffset + 1 >= message.length) {
+        return null;
+      }
       const pointer = ((length & 0x3f) << 8) | message[currentOffset + 1];
-      if (pointer >= message.length) break;
-      const decompressed = parseDomainName(message, pointer);
-      if (decompressed) parts.push(...decompressed.name.split('.'));
+      // Validate pointer is within message and points to valid location (after header)
+      if (pointer >= message.length || pointer < 12) {
+        logger.warn('Invalid compression pointer in DDNS parseDomainName', {
+          currentOffset,
+          pointer,
+          messageLength: message.length,
+        });
+        return null;
+      }
+      // Prevent following compression pointer if we've already visited it
+      if (visited.has(pointer)) {
+        logger.warn('Compression pointer loop detected', { currentOffset, pointer });
+        return null;
+      }
       currentOffset += 2;
+      // Recursively follow compression pointer
+      const decompressed = parseDomainName(message, pointer, visited, depth + 1);
+      if (!decompressed) return null;
+      parts.push(...decompressed.name.split('.'));
       break;
     }
+
+    // Validate label length (RFC 1035: labels max 63 bytes)
+    if (length > 63) {
+      logger.warn('Invalid label length in DDNS parseDomainName', { currentOffset, length });
+      return null;
+    }
+
     currentOffset++;
-    if (currentOffset + length > message.length) return null;
+    // Validate we have enough bytes for this label
+    if (currentOffset + length > message.length) {
+      return null;
+    }
     parts.push(message.toString('utf8', currentOffset, currentOffset + length));
     currentOffset += length;
+    labelCount++;
   }
 
-  return { name: parts.join('.'), newOffset: currentOffset };
+  const name = parts.join('.');
+  // Validate total domain name length
+  if (name.length > maxDomainLength) {
+    logger.warn('Domain name exceeds maximum length in DDNS parseDomainName', { nameLength: name.length });
+    return null;
+  }
+
+  return { name, newOffset: currentOffset };
 }
 
 function createUpdateResponse(id: number, rcode: number): Buffer {
