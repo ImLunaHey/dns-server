@@ -2905,11 +2905,13 @@ async function main() {
 
   // Start HTTP API server
   const port = 3001;
-  logger.info('API server running', { port, url: `http://localhost:${port}` });
+  const hostname = process.env.API_HOST || '127.0.0.1'; // Bind to localhost by default when using Caddy
+  logger.info('API server running', { port, hostname, url: `http://${hostname}:${port}` });
 
   serve({
     fetch: app.fetch,
     port,
+    hostname,
   });
 }
 

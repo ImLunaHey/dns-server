@@ -4,16 +4,29 @@
 # Caddy will automatically bind to the domain/IP specified
 
 {$DOMAIN:localhost} {
-  # Proxy API requests to the server (port 3001)
-  reverse_proxy /api/* localhost:3001 {
+  # Bind to the domain/IP (Caddy will handle external connections)
+  # If using an IP, explicitly bind to that IP
+  # If using a domain, Caddy will bind to all interfaces (0.0.0.0) for that domain
+  # Note: The install script will add "bind" directive for IP addresses
+  
+  # Proxy DNS-over-HTTPS (DoH) requests to the server (port 3001 on localhost)
+  reverse_proxy /dns-query 127.0.0.1:3001 {
     header_up Host {host}
     header_up X-Real-IP {remote}
     header_up X-Forwarded-For {remote}
     header_up X-Forwarded-Proto {scheme}
   }
   
-  # Proxy all other requests to the client (port 3000)
-  reverse_proxy /* localhost:3000 {
+  # Proxy API requests to the server (port 3001 on localhost)
+  reverse_proxy /api/* 127.0.0.1:3001 {
+    header_up Host {host}
+    header_up X-Real-IP {remote}
+    header_up X-Forwarded-For {remote}
+    header_up X-Forwarded-Proto {scheme}
+  }
+  
+  # Proxy all other requests to the client (port 3000 on localhost)
+  reverse_proxy /* 127.0.0.1:3000 {
     header_up Host {host}
     header_up X-Real-IP {remote}
     header_up X-Forwarded-For {remote}
