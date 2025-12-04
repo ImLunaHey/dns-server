@@ -36,6 +36,7 @@ import db from './db.js';
 import { auth } from './auth.js';
 import { requireAuth } from './middleware.js';
 import { validateRegexPattern } from './regex-utils.js';
+import { validateDomain } from './domain-validator.js';
 
 export const app = new Hono();
 export const dnsServer = new DNSServer();
@@ -1342,6 +1343,10 @@ app.post('/api/blocklist/add', requireAuth, async (c) => {
   if (!domain) {
     return c.json({ error: 'Domain is required' }, 400);
   }
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   dnsServer.addToBlocklist(domain);
   return c.json({ success: true, message: `Added ${domain} to blocklist` });
 });
@@ -1350,6 +1355,10 @@ app.post('/api/blocklist/remove', requireAuth, async (c) => {
   const { domain } = await c.req.json();
   if (!domain) {
     return c.json({ error: 'Domain is required' }, 400);
+  }
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
   }
   dnsServer.removeFromBlocklist(domain);
   return c.json({ success: true, message: `Removed ${domain} from blocklist` });
@@ -1365,6 +1374,10 @@ app.post('/api/allowlist/add', requireAuth, async (c) => {
   if (!domain) {
     return c.json({ error: 'Domain is required' }, 400);
   }
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   dbAllowlist.add(domain, comment);
   return c.json({ success: true, message: `Added ${domain} to allowlist` });
 });
@@ -1373,6 +1386,10 @@ app.post('/api/allowlist/remove', requireAuth, async (c) => {
   const { domain } = await c.req.json();
   if (!domain) {
     return c.json({ error: 'Domain is required' }, 400);
+  }
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
   }
   dbAllowlist.remove(domain);
   return c.json({ success: true, message: `Removed ${domain} from allowlist` });
@@ -1523,18 +1540,30 @@ app.post('/api/local-dns', requireAuth, async (c) => {
   if (!domain || !ip) {
     return c.json({ error: 'domain and ip are required' }, 400);
   }
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   dbLocalDNS.add(domain, ip, type);
   return c.json({ success: true });
 });
 
 app.delete('/api/local-dns/:domain', requireAuth, (c) => {
-  const domain = c.req.param('domain');
+  const domain = decodeURIComponent(c.req.param('domain'));
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   dbLocalDNS.remove(domain);
   return c.json({ success: true });
 });
 
 app.put('/api/local-dns/:domain/enable', requireAuth, async (c) => {
-  const domain = c.req.param('domain');
+  const domain = decodeURIComponent(c.req.param('domain'));
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   const { enabled } = await c.req.json();
   dbLocalDNS.setEnabled(domain, enabled);
   return c.json({ success: true });
@@ -1556,6 +1585,10 @@ app.post('/api/conditional-forwarding', requireAuth, async (c) => {
   if (!domain || !upstreamDNS) {
     return c.json({ error: 'domain and upstreamDNS are required' }, 400);
   }
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   dbConditionalForwarding.add(domain, upstreamDNS, comment, priority || 0);
   return c.json({ success: true });
 });
@@ -1565,6 +1598,10 @@ app.put('/api/conditional-forwarding/:id', requireAuth, async (c) => {
   const { domain, upstreamDNS, comment, priority } = await c.req.json();
   if (!domain || !upstreamDNS) {
     return c.json({ error: 'domain and upstreamDNS are required' }, 400);
+  }
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
   }
   dbConditionalForwarding.update(id, domain, upstreamDNS, comment, priority);
   return c.json({ success: true });
@@ -2492,13 +2529,21 @@ app.post('/api/clients/:clientIp/allowlist', requireAuth, async (c) => {
   if (!domain) {
     return c.json({ error: 'domain is required' }, 400);
   }
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   dbClientAllowlist.add(clientIp, domain);
   return c.json({ success: true });
 });
 
 app.delete('/api/clients/:clientIp/allowlist/:domain', requireAuth, (c) => {
   const clientIp = c.req.param('clientIp');
-  const domain = c.req.param('domain');
+  const domain = decodeURIComponent(c.req.param('domain'));
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   dbClientAllowlist.remove(clientIp, domain);
   return c.json({ success: true });
 });
@@ -2509,13 +2554,21 @@ app.post('/api/clients/:clientIp/blocklist', requireAuth, async (c) => {
   if (!domain) {
     return c.json({ error: 'domain is required' }, 400);
   }
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   dbClientBlocklist.add(clientIp, domain);
   return c.json({ success: true });
 });
 
 app.delete('/api/clients/:clientIp/blocklist/:domain', requireAuth, (c) => {
   const clientIp = c.req.param('clientIp');
-  const domain = c.req.param('domain');
+  const domain = decodeURIComponent(c.req.param('domain'));
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   dbClientBlocklist.remove(clientIp, domain);
   return c.json({ success: true });
 });
@@ -2575,13 +2628,21 @@ app.post('/api/groups/:id/allowlist', requireAuth, async (c) => {
   if (!domain) {
     return c.json({ error: 'domain is required' }, 400);
   }
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   dbGroupAllowlist.add(id, domain);
   return c.json({ success: true });
 });
 
 app.delete('/api/groups/:id/allowlist/:domain', requireAuth, (c) => {
   const id = Number(c.req.param('id'));
-  const domain = c.req.param('domain');
+  const domain = decodeURIComponent(c.req.param('domain'));
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+  }
   dbGroupAllowlist.remove(id, domain);
   return c.json({ success: true });
 });
@@ -2591,6 +2652,10 @@ app.post('/api/groups/:id/blocklist', requireAuth, async (c) => {
   const { domain } = await c.req.json();
   if (!domain) {
     return c.json({ error: 'domain is required' }, 400);
+  }
+  const validation = validateDomain(domain);
+  if (!validation.valid) {
+    return c.json({ error: validation.error || 'Invalid domain format' }, 400);
   }
   dbGroupBlocklist.add(id, domain);
   return c.json({ success: true });
@@ -2676,6 +2741,11 @@ app.post('/api/zones', requireAuth, async (c) => {
       return c.json({ error: 'domain, soaMname, and soaRname are required' }, 400);
     }
 
+    const validation = validateDomain(domain);
+    if (!validation.valid) {
+      return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+    }
+
     const zoneId = dbZones.create(domain, soaMname, soaRname);
     const zone = dbZones.getById(zoneId);
     return c.json(zone, 201);
@@ -2700,6 +2770,15 @@ app.put('/api/zones/:id', requireAuth, async (c) => {
   try {
     const id = parseInt(c.req.param('id'), 10);
     const updates = await c.req.json();
+
+    // Validate domain if it's being updated
+    if (updates.domain) {
+      const validation = validateDomain(updates.domain);
+      if (!validation.valid) {
+        return c.json({ error: validation.error || 'Invalid domain format' }, 400);
+      }
+    }
+
     dbZones.update(id, updates);
     const zone = dbZones.getById(id);
     if (!zone) {
