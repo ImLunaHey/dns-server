@@ -674,21 +674,68 @@ EOF
 fi
 
 # Check if anything else is using port 53
+PORT53_IN_USE=false
+PORT53_PROCESS=""
+PORT53_PROCESS_NAME=""
+
 if command -v lsof &> /dev/null; then
   PORT53_PROCESS=$(sudo lsof -i :53 -t 2>/dev/null | head -1)
   if [ -n "$PORT53_PROCESS" ]; then
-    PROCESS_NAME=$(ps -p "$PORT53_PROCESS" -o comm= 2>/dev/null || echo "unknown")
-    echo -e "${YELLOW}Warning: Process $PROCESS_NAME (PID: $PORT53_PROCESS) is using port 53${NC}"
-    echo -e "${YELLOW}You may need to stop this process before starting the DNS server${NC}"
-    read -p "Press Enter to continue..."
+    PORT53_PROCESS_NAME=$(ps -p "$PORT53_PROCESS" -o comm= 2>/dev/null || echo "unknown")
+    PORT53_IN_USE=true
   fi
 elif command -v netstat &> /dev/null; then
-  PORT53_PROCESS=$(sudo netstat -tulpn 2>/dev/null | grep ':53 ' | head -1)
-  if [ -n "$PORT53_PROCESS" ]; then
-    echo -e "${YELLOW}Warning: Something is using port 53:${NC}"
-    echo "$PORT53_PROCESS"
+  PORT53_INFO=$(sudo netstat -tulpn 2>/dev/null | grep ':53 ' | head -1)
+  if [ -n "$PORT53_INFO" ]; then
+    PORT53_PROCESS=$(echo "$PORT53_INFO" | awk '{print $7}' | cut -d'/' -f1)
+    PORT53_PROCESS_NAME=$(echo "$PORT53_INFO" | awk '{print $7}' | cut -d'/' -f2)
+    PORT53_IN_USE=true
+  fi
+fi
+
+if [ "$PORT53_IN_USE" = true ]; then
+  # Check if it's our DNS server
+  IS_OUR_SERVER=false
+  
+  # Check if it's our systemd service
+  if systemctl is-active --quiet dns-server.service 2>/dev/null; then
+    IS_OUR_SERVER=true
+    echo -e "${GREEN}Detected our DNS server is already running${NC}"
+    echo -e "${GREEN}  Will stop it, update configuration, and restart it${NC}"
+  # Check if the process is node and matches our server path
+  elif [ "$PORT53_PROCESS_NAME" = "node" ] && [ -n "$PORT53_PROCESS" ]; then
+    # Try to check if it's running our server
+    PROCESS_CMD=$(ps -p "$PORT53_PROCESS" -o cmd= 2>/dev/null || echo "")
+    if echo "$PROCESS_CMD" | grep -q "dns-server.*dist/index.js" || echo "$PROCESS_CMD" | grep -q "$INSTALL_PATH/apps/server"; then
+      IS_OUR_SERVER=true
+      echo -e "${GREEN}Detected our DNS server process is running (PID: $PORT53_PROCESS)${NC}"
+      echo -e "${GREEN}  Will stop it, update configuration, and restart it${NC}"
+    fi
+  fi
+  
+  if [ "$IS_OUR_SERVER" = true ]; then
+    # Stop our server gracefully
+    if systemctl is-active --quiet dns-server.service 2>/dev/null; then
+      echo -e "${GREEN}Stopping DNS server service...${NC}"
+      systemctl stop dns-server.service
+    else
+      echo -e "${GREEN}Stopping DNS server process (PID: $PORT53_PROCESS)...${NC}"
+      kill -TERM "$PORT53_PROCESS" 2>/dev/null || true
+      # Wait a moment for graceful shutdown
+      sleep 2
+      # Force kill if still running
+      if kill -0 "$PORT53_PROCESS" 2>/dev/null; then
+        echo -e "${YELLOW}Process still running, forcing shutdown...${NC}"
+        kill -KILL "$PORT53_PROCESS" 2>/dev/null || true
+      fi
+    fi
+    echo -e "${GREEN}✓ DNS server stopped${NC}"
+  else
+    # It's something else using port 53
+    echo -e "${YELLOW}Warning: Process $PORT53_PROCESS_NAME (PID: $PORT53_PROCESS) is using port 53${NC}"
+    echo -e "${YELLOW}This doesn't appear to be our DNS server.${NC}"
     echo -e "${YELLOW}You may need to stop this process before starting the DNS server${NC}"
-    read -p "Press Enter to continue..."
+    read -p "Press Enter to continue anyway, or Ctrl+C to cancel..."
   fi
 fi
 
@@ -832,11 +879,17 @@ echo -e "${GREEN}Reloading systemd...${NC}"
 systemctl daemon-reload
 
 # Stop services if they're running (for re-run)
+# Note: We may have already stopped the server above if it was using port 53
 if [ "$RE_RUN" = true ]; then
   echo -e "${GREEN}Stopping existing services for update...${NC}"
-  systemctl stop dns-server.service 2>/dev/null || true
+  # Only stop if not already stopped (we may have stopped it above)
+  if systemctl is-active --quiet dns-server.service 2>/dev/null; then
+    systemctl stop dns-server.service 2>/dev/null || true
+  fi
   if [ -f "$SYSTEMD_CLIENT_PATH" ]; then
-    systemctl stop dns-client.service 2>/dev/null || true
+    if systemctl is-active --quiet dns-client.service 2>/dev/null; then
+      systemctl stop dns-client.service 2>/dev/null || true
+    fi
   fi
 fi
 
