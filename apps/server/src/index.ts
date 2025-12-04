@@ -2894,11 +2894,82 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
       return c.json({ error: 'Invalid export file format' }, 400);
     }
 
+    // Define maximum limits to prevent DoS attacks
+    const MAX_ARRAY_SIZE = 10000;
+    const MAX_STRING_LENGTH = 10000;
+    const MAX_COMMENT_LENGTH = 1000;
+    const MAX_NAME_LENGTH = 255;
+
+    // Validate array sizes
+    const validateArraySize = (arr: unknown[] | undefined, name: string): void => {
+      if (arr && arr.length > MAX_ARRAY_SIZE) {
+        throw new Error(`${name} array size (${arr.length}) exceeds maximum allowed size (${MAX_ARRAY_SIZE})`);
+      }
+    };
+
+    // Validate string length
+    const validateStringLength = (str: string | undefined, maxLength: number, fieldName: string): void => {
+      if (str && str.length > maxLength) {
+        throw new Error(`${fieldName} length (${str.length}) exceeds maximum allowed length (${maxLength})`);
+      }
+    };
+
+    // Validate all arrays before processing
+    validateArraySize(importData.adlists, 'adlists');
+    validateArraySize(importData.allowlist, 'allowlist');
+    validateArraySize(importData.manualBlocklist, 'manualBlocklist');
+    validateArraySize(importData.regexFilters, 'regexFilters');
+    validateArraySize(importData.localDNS, 'localDNS');
+    validateArraySize(importData.conditionalForwarding, 'conditionalForwarding');
+    validateArraySize(importData.clientNames, 'clientNames');
+    validateArraySize(importData.clientGroups, 'clientGroups');
+    if (importData.groupBlockingRules) {
+      validateArraySize(importData.groupBlockingRules, 'groupBlockingRules');
+    }
+
     // Import settings
     if (importData.settings) {
-      Object.entries(importData.settings).forEach(([key, value]) => {
-        dbSettings.set(key, String(value));
-      });
+      if (typeof importData.settings !== 'object' || Array.isArray(importData.settings)) {
+        logger.warn('Invalid settings format, skipping import');
+      } else {
+        const settingsEntries = Object.entries(importData.settings);
+        if (settingsEntries.length > MAX_ARRAY_SIZE) {
+          logger.warn(`Settings object too large (${settingsEntries.length} entries), limiting to ${MAX_ARRAY_SIZE}`);
+          settingsEntries.slice(0, MAX_ARRAY_SIZE).forEach(([key, value]) => {
+            try {
+              if (typeof key !== 'string' || key.length > MAX_NAME_LENGTH) {
+                logger.warn('Invalid setting key skipped', { key });
+                return;
+              }
+              const valueStr = String(value);
+              validateStringLength(valueStr, MAX_STRING_LENGTH, 'setting value');
+              dbSettings.set(key, valueStr);
+            } catch (error) {
+              logger.warn('Failed to import setting', {
+                error: error instanceof Error ? error : new Error(String(error)),
+                key,
+              });
+            }
+          });
+        } else {
+          Object.entries(importData.settings).forEach(([key, value]) => {
+            try {
+              if (typeof key !== 'string' || key.length > MAX_NAME_LENGTH) {
+                logger.warn('Invalid setting key skipped', { key });
+                return;
+              }
+              const valueStr = String(value);
+              validateStringLength(valueStr, MAX_STRING_LENGTH, 'setting value');
+              dbSettings.set(key, valueStr);
+            } catch (error) {
+              logger.warn('Failed to import setting', {
+                error: error instanceof Error ? error : new Error(String(error)),
+                key,
+              });
+            }
+          });
+        }
+      }
     }
 
     // Import adlists
@@ -2912,12 +2983,22 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
       });
       importData.adlists.forEach((adlist: { url: string; enabled?: number }) => {
         try {
+          // Validate URL
+          if (!adlist.url || typeof adlist.url !== 'string') {
+            logger.warn('Invalid adlist entry skipped', { adlist });
+            return;
+          }
+          validateStringLength(adlist.url, MAX_STRING_LENGTH, 'adlist URL');
           dbAdlists.add(adlist.url);
           if (adlist.enabled !== undefined) {
             dbAdlists.setEnabled(adlist.url, adlist.enabled === 1);
           }
-        } catch {
-          // Already exists, skip
+        } catch (error) {
+          logger.warn('Failed to import adlist entry', {
+            error: error instanceof Error ? error : new Error(String(error)),
+            adlist,
+          });
+          // Already exists or invalid, skip
         }
       });
     }
@@ -2926,9 +3007,29 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
     if (importData.allowlist && Array.isArray(importData.allowlist)) {
       importData.allowlist.forEach((entry: { domain: string; comment?: string }) => {
         try {
+          // Validate domain
+          if (!entry.domain || typeof entry.domain !== 'string') {
+            logger.warn('Invalid allowlist entry skipped', { entry });
+            return;
+          }
+          const domainValidation = validateDomain(entry.domain);
+          if (!domainValidation.valid) {
+            logger.warn('Invalid domain in allowlist entry', {
+              domain: entry.domain,
+              error: domainValidation.error,
+            });
+            return;
+          }
+          if (entry.comment) {
+            validateStringLength(entry.comment, MAX_COMMENT_LENGTH, 'allowlist comment');
+          }
           dbAllowlist.add(entry.domain, entry.comment);
-        } catch {
-          // Already exists, skip
+        } catch (error) {
+          logger.warn('Failed to import allowlist entry', {
+            error: error instanceof Error ? error : new Error(String(error)),
+            entry,
+          });
+          // Already exists or invalid, skip
         }
       });
     }
@@ -2937,9 +3038,29 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
     if (importData.manualBlocklist && Array.isArray(importData.manualBlocklist)) {
       importData.manualBlocklist.forEach((entry: { domain: string; comment?: string }) => {
         try {
+          // Validate domain
+          if (!entry.domain || typeof entry.domain !== 'string') {
+            logger.warn('Invalid blocklist entry skipped', { entry });
+            return;
+          }
+          const domainValidation = validateDomain(entry.domain);
+          if (!domainValidation.valid) {
+            logger.warn('Invalid domain in blocklist entry', {
+              domain: entry.domain,
+              error: domainValidation.error,
+            });
+            return;
+          }
+          if (entry.comment) {
+            validateStringLength(entry.comment, MAX_COMMENT_LENGTH, 'blocklist comment');
+          }
           dbManualBlocklist.add(entry.domain, entry.comment);
-        } catch {
-          // Already exists, skip
+        } catch (error) {
+          logger.warn('Failed to import blocklist entry', {
+            error: error instanceof Error ? error : new Error(String(error)),
+            entry,
+          });
+          // Already exists or invalid, skip
         }
       });
     }
@@ -2948,6 +3069,26 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
     if (importData.regexFilters && Array.isArray(importData.regexFilters)) {
       importData.regexFilters.forEach((filter: { pattern: string; type: string; enabled?: number; comment?: string }) => {
         try {
+          // Validate regex filter
+          if (!filter.pattern || typeof filter.pattern !== 'string') {
+            logger.warn('Invalid regex filter entry skipped', { filter });
+            return;
+          }
+          if (filter.type !== 'block' && filter.type !== 'allow') {
+            logger.warn('Invalid regex filter type', { filter });
+            return;
+          }
+          const regexValidation = validateRegexPattern(filter.pattern);
+          if (!regexValidation.valid) {
+            logger.warn('Invalid regex pattern in filter', {
+              pattern: filter.pattern,
+              error: regexValidation.error,
+            });
+            return;
+          }
+          if (filter.comment) {
+            validateStringLength(filter.comment, MAX_COMMENT_LENGTH, 'regex filter comment');
+          }
           // Check if filter already exists
           const existing = dbRegexFilters.getAll().find((f) => f.pattern === filter.pattern);
           if (existing) {
@@ -2962,8 +3103,12 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
               dbRegexFilters.setEnabled(added.id, filter.enabled === 1);
             }
           }
-        } catch {
-          // Already exists, skip
+        } catch (error) {
+          logger.warn('Failed to import regex filter', {
+            error: error instanceof Error ? error : new Error(String(error)),
+            filter,
+          });
+          // Already exists or invalid, skip
         }
       });
     }
@@ -2972,12 +3117,37 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
     if (importData.localDNS && Array.isArray(importData.localDNS)) {
       importData.localDNS.forEach((record: { domain: string; ip: string; type: string; enabled?: number }) => {
         try {
+          // Validate local DNS record
+          if (!record.domain || typeof record.domain !== 'string') {
+            logger.warn('Invalid local DNS entry skipped', { record });
+            return;
+          }
+          if (!record.ip || typeof record.ip !== 'string') {
+            logger.warn('Invalid local DNS entry skipped', { record });
+            return;
+          }
+          const domainValidation = validateDomain(record.domain);
+          if (!domainValidation.valid) {
+            logger.warn('Invalid domain in local DNS entry', {
+              domain: record.domain,
+              error: domainValidation.error,
+            });
+            return;
+          }
+          validateStringLength(record.ip, MAX_STRING_LENGTH, 'local DNS IP');
+          if (record.type) {
+            validateStringLength(record.type, 10, 'local DNS type');
+          }
           dbLocalDNS.add(record.domain, record.ip, record.type);
           if (record.enabled !== undefined) {
             dbLocalDNS.setEnabled(record.domain, record.enabled === 1);
           }
-        } catch {
-          // Already exists, skip
+        } catch (error) {
+          logger.warn('Failed to import local DNS entry', {
+            error: error instanceof Error ? error : new Error(String(error)),
+            record,
+          });
+          // Already exists or invalid, skip
         }
       });
     }
@@ -2987,10 +3157,35 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
       importData.conditionalForwarding.forEach(
         (rule: { domain: string; upstreamDNS: string; enabled?: number; comment?: string }) => {
           try {
+            // Validate conditional forwarding rule
+            if (!rule.domain || typeof rule.domain !== 'string') {
+              logger.warn('Invalid conditional forwarding entry skipped', { rule });
+              return;
+            }
+            if (!rule.upstreamDNS || typeof rule.upstreamDNS !== 'string') {
+              logger.warn('Invalid conditional forwarding entry skipped', { rule });
+              return;
+            }
+            const domainValidation = validateDomain(rule.domain);
+            if (!domainValidation.valid) {
+              logger.warn('Invalid domain in conditional forwarding entry', {
+                domain: rule.domain,
+                error: domainValidation.error,
+              });
+              return;
+            }
+            validateStringLength(rule.upstreamDNS, MAX_STRING_LENGTH, 'conditional forwarding upstream DNS');
+            if (rule.comment) {
+              validateStringLength(rule.comment, MAX_COMMENT_LENGTH, 'conditional forwarding comment');
+            }
             dbConditionalForwarding.add(rule.domain, rule.upstreamDNS, rule.comment);
             // Note: Can't set enabled on add, would need to get ID and update
-          } catch {
-            // Already exists, skip
+          } catch (error) {
+            logger.warn('Failed to import conditional forwarding entry', {
+              error: error instanceof Error ? error : new Error(String(error)),
+              rule,
+            });
+            // Already exists or invalid, skip
           }
         },
       );
@@ -2999,7 +3194,25 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
     // Import client names
     if (importData.clientNames && Array.isArray(importData.clientNames)) {
       importData.clientNames.forEach((entry: { clientIp: string; name: string }) => {
-        dbClientNames.setName(entry.clientIp, entry.name);
+        try {
+          // Validate client name entry
+          if (!entry.clientIp || typeof entry.clientIp !== 'string') {
+            logger.warn('Invalid client name entry skipped', { entry });
+            return;
+          }
+          if (!entry.name || typeof entry.name !== 'string') {
+            logger.warn('Invalid client name entry skipped', { entry });
+            return;
+          }
+          validateStringLength(entry.clientIp, MAX_STRING_LENGTH, 'client IP');
+          validateStringLength(entry.name, MAX_NAME_LENGTH, 'client name');
+          dbClientNames.setName(entry.clientIp, entry.name);
+        } catch (error) {
+          logger.warn('Failed to import client name entry', {
+            error: error instanceof Error ? error : new Error(String(error)),
+            entry,
+          });
+        }
       });
     }
 
@@ -3008,6 +3221,20 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
       const groupIdMap = new Map<number, number>(); // old ID -> new ID
       importData.clientGroups.forEach((group: { id?: number; name: string; description?: string; members?: string[] }) => {
         try {
+          // Validate client group
+          if (!group.name || typeof group.name !== 'string') {
+            logger.warn('Invalid client group entry skipped', { group });
+            return;
+          }
+          validateStringLength(group.name, MAX_NAME_LENGTH, 'client group name');
+          if (group.description) {
+            validateStringLength(group.description, MAX_COMMENT_LENGTH, 'client group description');
+          }
+          // Validate members array size
+          if (group.members && group.members.length > MAX_ARRAY_SIZE) {
+            logger.warn('Client group members array too large', { groupName: group.name, size: group.members.length });
+            return;
+          }
           const newGroupId = dbClientGroups.create(group.name, group.description);
           if (group.id !== undefined) {
             groupIdMap.set(group.id, newGroupId);
@@ -3015,13 +3242,27 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
           if (group.members && Array.isArray(group.members)) {
             group.members.forEach((clientIp: string) => {
               try {
+                if (typeof clientIp !== 'string') {
+                  logger.warn('Invalid client IP in group members', { clientIp, groupName: group.name });
+                  return;
+                }
+                validateStringLength(clientIp, MAX_STRING_LENGTH, 'client IP');
                 dbClientGroups.addMember(newGroupId, clientIp);
-              } catch {
+              } catch (error) {
+                logger.warn('Failed to add group member', {
+                  error: error instanceof Error ? error : new Error(String(error)),
+                  clientIp,
+                  groupName: group.name,
+                });
                 // Already a member, skip
               }
             });
           }
-        } catch {
+        } catch (error) {
+          logger.warn('Failed to import client group', {
+            error: error instanceof Error ? error : new Error(String(error)),
+            group,
+          });
           // Already exists, skip
         }
       });
@@ -3039,22 +3280,68 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
             if (newGroupId) {
               dbGroupBlockingRules.setBlockingEnabled(newGroupId, rule.enabled);
               if (rule.allowlist) {
-                rule.allowlist.forEach((entry: { domain: string }) => {
-                  try {
-                    dbGroupAllowlist.add(newGroupId, entry.domain);
-                  } catch {
-                    // Already exists, skip
-                  }
-                });
+                // Validate allowlist array size
+                if (rule.allowlist.length > MAX_ARRAY_SIZE) {
+                  logger.warn('Group allowlist array too large', { groupId: newGroupId, size: rule.allowlist.length });
+                } else {
+                  rule.allowlist.forEach((entry: { domain: string }) => {
+                    try {
+                      if (!entry.domain || typeof entry.domain !== 'string') {
+                        logger.warn('Invalid domain in group allowlist', { entry, groupId: newGroupId });
+                        return;
+                      }
+                      const domainValidation = validateDomain(entry.domain);
+                      if (!domainValidation.valid) {
+                        logger.warn('Invalid domain in group allowlist', {
+                          domain: entry.domain,
+                          error: domainValidation.error,
+                          groupId: newGroupId,
+                        });
+                        return;
+                      }
+                      dbGroupAllowlist.add(newGroupId, entry.domain);
+                    } catch (error) {
+                      logger.warn('Failed to add group allowlist entry', {
+                        error: error instanceof Error ? error : new Error(String(error)),
+                        entry,
+                        groupId: newGroupId,
+                      });
+                      // Already exists, skip
+                    }
+                  });
+                }
               }
               if (rule.blocklist) {
-                rule.blocklist.forEach((entry: { domain: string }) => {
-                  try {
-                    dbGroupBlocklist.add(newGroupId, entry.domain);
-                  } catch {
-                    // Already exists, skip
-                  }
-                });
+                // Validate blocklist array size
+                if (rule.blocklist.length > MAX_ARRAY_SIZE) {
+                  logger.warn('Group blocklist array too large', { groupId: newGroupId, size: rule.blocklist.length });
+                } else {
+                  rule.blocklist.forEach((entry: { domain: string }) => {
+                    try {
+                      if (!entry.domain || typeof entry.domain !== 'string') {
+                        logger.warn('Invalid domain in group blocklist', { entry, groupId: newGroupId });
+                        return;
+                      }
+                      const domainValidation = validateDomain(entry.domain);
+                      if (!domainValidation.valid) {
+                        logger.warn('Invalid domain in group blocklist', {
+                          domain: entry.domain,
+                          error: domainValidation.error,
+                          groupId: newGroupId,
+                        });
+                        return;
+                      }
+                      dbGroupBlocklist.add(newGroupId, entry.domain);
+                    } catch (error) {
+                      logger.warn('Failed to add group blocklist entry', {
+                        error: error instanceof Error ? error : new Error(String(error)),
+                        entry,
+                        groupId: newGroupId,
+                      });
+                      // Already exists, skip
+                    }
+                  });
+                }
               }
             }
           },
@@ -3069,27 +3356,91 @@ app.post('/api/teleporter/import', requireAuth, async (c) => {
           allowlist?: Array<{ domain: string }>;
           blocklist?: Array<{ domain: string }>;
         }) => {
-          const group = dbClientGroups.getById(rule.groupId);
-          if (group) {
-            dbGroupBlockingRules.setBlockingEnabled(rule.groupId, rule.enabled);
-            if (rule.allowlist) {
-              rule.allowlist.forEach((entry: { domain: string }) => {
-                try {
-                  dbGroupAllowlist.add(rule.groupId, entry.domain);
-                } catch {
-                  // Already exists, skip
-                }
-              });
+          try {
+            // Validate group ID
+            if (typeof rule.groupId !== 'number' || rule.groupId <= 0) {
+              logger.warn('Invalid group ID in blocking rules', { rule });
+              return;
             }
-            if (rule.blocklist) {
-              rule.blocklist.forEach((entry: { domain: string }) => {
-                try {
-                  dbGroupBlocklist.add(rule.groupId, entry.domain);
-                } catch {
-                  // Already exists, skip
-                }
-              });
+            if (typeof rule.enabled !== 'boolean') {
+              logger.warn('Invalid enabled value in blocking rules', { rule });
+              return;
             }
+            const group = dbClientGroups.getById(rule.groupId);
+            if (group) {
+              dbGroupBlockingRules.setBlockingEnabled(rule.groupId, rule.enabled);
+              if (rule.allowlist) {
+                // Validate allowlist array size
+                if (rule.allowlist.length > MAX_ARRAY_SIZE) {
+                  logger.warn('Group allowlist array too large', { groupId: rule.groupId, size: rule.allowlist.length });
+                } else {
+                  rule.allowlist.forEach((entry: { domain: string }) => {
+                    try {
+                      if (!entry.domain || typeof entry.domain !== 'string') {
+                        logger.warn('Invalid domain in group allowlist', { entry, groupId: rule.groupId });
+                        return;
+                      }
+                      const domainValidation = validateDomain(entry.domain);
+                      if (!domainValidation.valid) {
+                        logger.warn('Invalid domain in group allowlist', {
+                          domain: entry.domain,
+                          error: domainValidation.error,
+                          groupId: rule.groupId,
+                        });
+                        return;
+                      }
+                      dbGroupAllowlist.add(rule.groupId, entry.domain);
+                    } catch (error) {
+                      logger.warn('Failed to add group allowlist entry', {
+                        error: error instanceof Error ? error : new Error(String(error)),
+                        entry,
+                        groupId: rule.groupId,
+                      });
+                      // Already exists, skip
+                    }
+                  });
+                }
+              }
+              if (rule.blocklist) {
+                // Validate blocklist array size
+                if (rule.blocklist.length > MAX_ARRAY_SIZE) {
+                  logger.warn('Group blocklist array too large', { groupId: rule.groupId, size: rule.blocklist.length });
+                } else {
+                  rule.blocklist.forEach((entry: { domain: string }) => {
+                    try {
+                      if (!entry.domain || typeof entry.domain !== 'string') {
+                        logger.warn('Invalid domain in group blocklist', { entry, groupId: rule.groupId });
+                        return;
+                      }
+                      const domainValidation = validateDomain(entry.domain);
+                      if (!domainValidation.valid) {
+                        logger.warn('Invalid domain in group blocklist', {
+                          domain: entry.domain,
+                          error: domainValidation.error,
+                          groupId: rule.groupId,
+                        });
+                        return;
+                      }
+                      dbGroupBlocklist.add(rule.groupId, entry.domain);
+                    } catch (error) {
+                      logger.warn('Failed to add group blocklist entry', {
+                        error: error instanceof Error ? error : new Error(String(error)),
+                        entry,
+                        groupId: rule.groupId,
+                      });
+                      // Already exists, skip
+                    }
+                  });
+                }
+              }
+            } else {
+              logger.warn('Group not found for blocking rules', { groupId: rule.groupId });
+            }
+          } catch (error) {
+            logger.warn('Failed to import group blocking rules', {
+              error: error instanceof Error ? error : new Error(String(error)),
+              rule,
+            });
           }
         },
       );
