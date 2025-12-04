@@ -109,6 +109,9 @@ app.use('/*', async (c, next) => {
   await next();
 });
 
+// Add error handling middleware
+app.use('/*', errorHandler);
+
 app.use(
   '/*',
   cors({
@@ -731,6 +734,7 @@ function parseDNSResponseToJSON(response: Buffer, domain: string, type: string):
 }
 
 import { getClientIp, isValidIP } from './client-ip.js';
+import { errorHandler, handleError } from './error-handler.js';
 
 // DNS-over-HTTPS (DoH) endpoint - RFC 8484
 // Supports both binary (application/dns-message) and JSON (application/dns-json) formats
@@ -880,10 +884,7 @@ app.all('/dns-query', async (c) => {
       });
     }
   } catch (error) {
-    logger.error('DoH error', {
-      error: error instanceof Error ? error : new Error(String(error)),
-    });
-    return c.text('Internal server error', 500);
+    return handleError(c, error, 'Failed to process DNS query');
   }
 });
 
