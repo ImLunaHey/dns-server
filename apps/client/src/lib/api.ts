@@ -1,7 +1,13 @@
 import { z } from "zod";
 
 // Use environment variable for API URL in production, or relative URL in dev
-const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? "" : "http://localhost:3001");
+// For IP addresses (including Tailscale), use relative URL to match the page protocol
+// For domains, use the full URL from environment
+const envApiUrl = import.meta.env.VITE_API_URL;
+// If env URL is an IP address, use relative URL (works with Tailscale HTTPS)
+const isIpAddress =
+  envApiUrl && /^https?:\/\/\d+\.\d+\.\d+\.\d+/.test(envApiUrl);
+const API_URL = isIpAddress ? "" : envApiUrl || (import.meta.env.DEV ? "" : "");
 
 // Zod IP validators return validated strings
 type IPv4 = z.infer<ReturnType<typeof z.ipv4>>;
@@ -142,7 +148,9 @@ export const api = {
   async getCacheStatistics(hours: number = 24): Promise<CacheStatistics> {
     const response = await fetch(`${API_URL}/api/stats/cache?hours=${hours}`);
     if (!response.ok) {
-      throw new Error(`Failed to fetch cache statistics: ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch cache statistics: ${response.statusText}`
+      );
     }
     return response.json();
   },
@@ -163,7 +171,11 @@ export const api = {
     return response.blob();
   },
 
-  async testDNSQuery(domain: string, type: string = 'A', dnssec: boolean = false): Promise<{
+  async testDNSQuery(
+    domain: string,
+    type: string = "A",
+    dnssec: boolean = false
+  ): Promise<{
     success: boolean;
     domain: string;
     type: string;
@@ -173,16 +185,18 @@ export const api = {
     error?: string;
   }> {
     const response = await fetch(`${API_URL}/api/dns/test`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({ domain, type, dnssec }),
     });
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error || `Failed to test DNS query: ${response.statusText}`);
+      throw new Error(
+        error.error || `Failed to test DNS query: ${response.statusText}`
+      );
     }
 
     return response.json();
@@ -393,7 +407,10 @@ export const api = {
   async getSettings(): Promise<{
     upstreamDNS: IP;
     upstreamDNSList?: string[];
-    upstreamHealth?: Record<string, { failures: number; lastFailure: number; disabledUntil: number }>;
+    upstreamHealth?: Record<
+      string,
+      { failures: number; lastFailure: number; disabledUntil: number }
+    >;
     dnsPort: number;
     queryRetentionDays: number;
     privacyMode: boolean;
@@ -418,7 +435,7 @@ export const api = {
     dnssecValidation?: boolean;
     dnssecChainValidation?: boolean;
     otelEnabled?: boolean;
-    otelExporterType?: 'otlp' | 'prometheus';
+    otelExporterType?: "otlp" | "prometheus";
     otelEndpoint?: string;
     otelHeaders?: string;
     otelPrometheusPort?: number;
@@ -449,7 +466,7 @@ export const api = {
     dnssecValidation?: boolean;
     dnssecChainValidation?: boolean;
     otelEnabled?: boolean;
-    otelExporterType?: 'otlp' | 'prometheus';
+    otelExporterType?: "otlp" | "prometheus";
     otelEndpoint?: string;
     otelHeaders?: string;
     otelPrometheusPort?: number;
@@ -479,12 +496,14 @@ export const api = {
     domain?: string;
   }): Promise<Blob> {
     const params = new URLSearchParams();
-    if (filters?.clientIp) params.append('clientIp', filters.clientIp);
-    if (filters?.type) params.append('type', filters.type);
-    if (filters?.blocked !== undefined) params.append('blocked', filters.blocked.toString());
-    if (filters?.startTime) params.append('startTime', filters.startTime.toString());
-    if (filters?.endTime) params.append('endTime', filters.endTime.toString());
-    if (filters?.domain) params.append('domain', filters.domain);
+    if (filters?.clientIp) params.append("clientIp", filters.clientIp);
+    if (filters?.type) params.append("type", filters.type);
+    if (filters?.blocked !== undefined)
+      params.append("blocked", filters.blocked.toString());
+    if (filters?.startTime)
+      params.append("startTime", filters.startTime.toString());
+    if (filters?.endTime) params.append("endTime", filters.endTime.toString());
+    if (filters?.domain) params.append("domain", filters.domain);
 
     const response = await fetch(`${API_URL}/api/queries/export/csv?${params}`);
     if (!response.ok) {
@@ -507,19 +526,27 @@ export const api = {
     maxResponseTime?: number;
   }): Promise<Blob> {
     const params = new URLSearchParams();
-    if (filters?.clientIp) params.append('clientIp', filters.clientIp);
-    if (filters?.type) params.append('type', filters.type);
-    if (filters?.blocked !== undefined) params.append('blocked', filters.blocked.toString());
-    if (filters?.startTime) params.append('startTime', filters.startTime.toString());
-    if (filters?.endTime) params.append('endTime', filters.endTime.toString());
-    if (filters?.domain) params.append('domain', filters.domain);
-    if (filters?.domainPattern) params.append('domainPattern', filters.domainPattern);
-    if (filters?.cached !== undefined) params.append('cached', filters.cached.toString());
-    if (filters?.blockReason) params.append('blockReason', filters.blockReason);
-    if (filters?.minResponseTime !== undefined) params.append('minResponseTime', filters.minResponseTime.toString());
-    if (filters?.maxResponseTime !== undefined) params.append('maxResponseTime', filters.maxResponseTime.toString());
+    if (filters?.clientIp) params.append("clientIp", filters.clientIp);
+    if (filters?.type) params.append("type", filters.type);
+    if (filters?.blocked !== undefined)
+      params.append("blocked", filters.blocked.toString());
+    if (filters?.startTime)
+      params.append("startTime", filters.startTime.toString());
+    if (filters?.endTime) params.append("endTime", filters.endTime.toString());
+    if (filters?.domain) params.append("domain", filters.domain);
+    if (filters?.domainPattern)
+      params.append("domainPattern", filters.domainPattern);
+    if (filters?.cached !== undefined)
+      params.append("cached", filters.cached.toString());
+    if (filters?.blockReason) params.append("blockReason", filters.blockReason);
+    if (filters?.minResponseTime !== undefined)
+      params.append("minResponseTime", filters.minResponseTime.toString());
+    if (filters?.maxResponseTime !== undefined)
+      params.append("maxResponseTime", filters.maxResponseTime.toString());
 
-    const response = await fetch(`${API_URL}/api/queries/export/json?${params}`);
+    const response = await fetch(
+      `${API_URL}/api/queries/export/json?${params}`
+    );
     if (!response.ok) {
       throw new Error(`Failed to export queries: ${response.statusText}`);
     }
@@ -618,10 +645,7 @@ export const api = {
     if (!response.ok) throw new Error("Failed to create TSIG key");
   },
 
-  async updateTSIGKeyEnabled(
-    id: number,
-    enabled: boolean
-  ): Promise<void> {
+  async updateTSIGKeyEnabled(id: number, enabled: boolean): Promise<void> {
     const response = await fetch(`${API_URL}/api/tsig-keys/${id}/enable`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -819,15 +843,34 @@ export const api = {
 
   async lookupDNS(
     domain: string,
-    type: "A" | "AAAA" | "PTR" | "MX" | "TXT" | "CNAME" | "NS" | "SRV" | "SOA" = "A"
+    type:
+      | "A"
+      | "AAAA"
+      | "PTR"
+      | "MX"
+      | "TXT"
+      | "CNAME"
+      | "NS"
+      | "SRV"
+      | "SOA" = "A"
   ): Promise<{
     domain: string;
     type: string;
     addresses?: string[];
     hostnames?: string[];
     answers?: Array<{ name: string; type: number; data: string }>;
-    authority?: Array<{ name: string; type: number; TTL: number; data: string }>;
-    additional?: Array<{ name: string; type: number; TTL: number; data: string }>;
+    authority?: Array<{
+      name: string;
+      type: number;
+      TTL: number;
+      data: string;
+    }>;
+    additional?: Array<{
+      name: string;
+      type: number;
+      TTL: number;
+      data: string;
+    }>;
     status?: number;
   }> {
     const response = await fetch(
@@ -843,20 +886,22 @@ export const api = {
   },
 
   // Authoritative DNS Zones
-  async getZones(): Promise<Array<{
-    id: number;
-    domain: string;
-    enabled: number;
-    soa_serial: number;
-    soa_refresh: number;
-    soa_retry: number;
-    soa_expire: number;
-    soa_minimum: number;
-    soa_mname: string;
-    soa_rname: string;
-    createdAt: number;
-    updatedAt: number;
-  }>> {
+  async getZones(): Promise<
+    Array<{
+      id: number;
+      domain: string;
+      enabled: number;
+      soa_serial: number;
+      soa_refresh: number;
+      soa_retry: number;
+      soa_expire: number;
+      soa_minimum: number;
+      soa_mname: string;
+      soa_rname: string;
+      createdAt: number;
+      updatedAt: number;
+    }>
+  > {
     const response = await fetch(`${API_URL}/api/zones`);
     if (!response.ok) {
       const error = await response.json();
@@ -865,7 +910,11 @@ export const api = {
     return response.json();
   },
 
-  async createZone(domain: string, soaMname: string, soaRname: string): Promise<{
+  async createZone(
+    domain: string,
+    soaMname: string,
+    soaRname: string
+  ): Promise<{
     id: number;
     domain: string;
     enabled: number;
@@ -891,17 +940,20 @@ export const api = {
     return response.json();
   },
 
-  async updateZone(id: number, updates: {
-    domain?: string;
-    enabled?: boolean;
-    soa_serial?: number;
-    soa_refresh?: number;
-    soa_retry?: number;
-    soa_expire?: number;
-    soa_minimum?: number;
-    soa_mname?: string;
-    soa_rname?: string;
-  }): Promise<{
+  async updateZone(
+    id: number,
+    updates: {
+      domain?: string;
+      enabled?: boolean;
+      soa_serial?: number;
+      soa_refresh?: number;
+      soa_retry?: number;
+      soa_expire?: number;
+      soa_minimum?: number;
+      soa_mname?: string;
+      soa_rname?: string;
+    }
+  ): Promise<{
     id: number;
     domain: string;
     enabled: number;
@@ -937,18 +989,20 @@ export const api = {
     }
   },
 
-  async getZoneRecords(zoneId: number): Promise<Array<{
-    id: number;
-    zone_id: number;
-    name: string;
-    type: string;
-    ttl: number;
-    data: string;
-    priority: number | null;
-    enabled: number;
-    createdAt: number;
-    updatedAt: number;
-  }>> {
+  async getZoneRecords(zoneId: number): Promise<
+    Array<{
+      id: number;
+      zone_id: number;
+      name: string;
+      type: string;
+      ttl: number;
+      data: string;
+      priority: number | null;
+      enabled: number;
+      createdAt: number;
+      updatedAt: number;
+    }>
+  > {
     const response = await fetch(`${API_URL}/api/zones/${zoneId}/records`);
     if (!response.ok) {
       const error = await response.json();
@@ -957,7 +1011,14 @@ export const api = {
     return response.json();
   },
 
-  async createZoneRecord(zoneId: number, name: string, type: string, ttl: number, data: string, priority?: number): Promise<{
+  async createZoneRecord(
+    zoneId: number,
+    name: string,
+    type: string,
+    ttl: number,
+    data: string,
+    priority?: number
+  ): Promise<{
     id: number;
     zone_id: number;
     name: string;
@@ -981,14 +1042,17 @@ export const api = {
     return response.json();
   },
 
-  async updateZoneRecord(id: number, updates: {
-    name?: string;
-    type?: string;
-    ttl?: number;
-    data?: string;
-    priority?: number | null;
-    enabled?: boolean;
-  }): Promise<{
+  async updateZoneRecord(
+    id: number,
+    updates: {
+      name?: string;
+      type?: string;
+      ttl?: number;
+      data?: string;
+      priority?: number | null;
+      enabled?: boolean;
+    }
+  ): Promise<{
     id: number;
     zone_id: number;
     name: string;
@@ -1052,10 +1116,7 @@ export const api = {
     return response.json();
   },
 
-  async updateDDNSTokenEnabled(
-    id: number,
-    enabled: boolean
-  ): Promise<void> {
+  async updateDDNSTokenEnabled(id: number, enabled: boolean): Promise<void> {
     const response = await fetch(`${API_URL}/api/ddns-tokens/${id}/enable`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -1084,18 +1145,27 @@ export const api = {
   },
 
   async getUpstreamStats(hours: number = 24): Promise<UpstreamStats[]> {
-    const response = await fetch(`${API_URL}/api/stats/upstream?hours=${hours}`, {
-      credentials: "include",
-    });
+    const response = await fetch(
+      `${API_URL}/api/stats/upstream?hours=${hours}`,
+      {
+        credentials: "include",
+      }
+    );
     if (!response.ok) throw new Error("Failed to fetch upstream statistics");
     return response.json();
   },
 
-  async getUpstreamHourlyStats(hours: number = 24): Promise<UpstreamHourlyStats[]> {
-    const response = await fetch(`${API_URL}/api/stats/upstream/hourly?hours=${hours}`, {
-      credentials: "include",
-    });
-    if (!response.ok) throw new Error("Failed to fetch upstream hourly statistics");
+  async getUpstreamHourlyStats(
+    hours: number = 24
+  ): Promise<UpstreamHourlyStats[]> {
+    const response = await fetch(
+      `${API_URL}/api/stats/upstream/hourly?hours=${hours}`,
+      {
+        credentials: "include",
+      }
+    );
+    if (!response.ok)
+      throw new Error("Failed to fetch upstream hourly statistics");
     return response.json();
   },
 
@@ -1119,7 +1189,10 @@ export const api = {
     return response.json();
   },
 
-  async createScheduledTask(data: { taskType: string; schedule: string }): Promise<void> {
+  async createScheduledTask(data: {
+    taskType: string;
+    schedule: string;
+  }): Promise<void> {
     const response = await fetch(`${API_URL}/api/scheduled-tasks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1162,7 +1235,9 @@ export const api = {
     return response.json();
   },
 
-  async runScheduledTask(id: number): Promise<{ success: boolean; message: string; updateId?: number }> {
+  async runScheduledTask(
+    id: number
+  ): Promise<{ success: boolean; message: string; updateId?: number }> {
     const response = await fetch(`${API_URL}/api/scheduled-tasks/${id}/run`, {
       method: "POST",
       credentials: "include",
@@ -1174,7 +1249,10 @@ export const api = {
     return response.json();
   },
 
-  async getScheduledTaskLogs(id: number, limit: number = 20): Promise<
+  async getScheduledTaskLogs(
+    id: number,
+    limit: number = 20
+  ): Promise<
     Array<{
       id: number;
       startedAt: number;
@@ -1184,9 +1262,12 @@ export const api = {
       error: string | null;
     }>
   > {
-    const response = await fetch(`${API_URL}/api/scheduled-tasks/${id}/logs?limit=${limit}`, {
-      credentials: "include",
-    });
+    const response = await fetch(
+      `${API_URL}/api/scheduled-tasks/${id}/logs?limit=${limit}`,
+      {
+        credentials: "include",
+      }
+    );
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || "Failed to fetch task logs");
@@ -1194,21 +1275,32 @@ export const api = {
     return response.json();
   },
 
-  async getClientUpstreamDNS(clientIp: string): Promise<{ upstreamDNS: string | null }> {
-    const response = await fetch(`${API_URL}/api/clients/${clientIp}/upstream-dns`, {
-      credentials: "include",
-    });
+  async getClientUpstreamDNS(
+    clientIp: string
+  ): Promise<{ upstreamDNS: string | null }> {
+    const response = await fetch(
+      `${API_URL}/api/clients/${clientIp}/upstream-dns`,
+      {
+        credentials: "include",
+      }
+    );
     if (!response.ok) throw new Error("Failed to fetch client upstream DNS");
     return response.json();
   },
 
-  async setClientUpstreamDNS(clientIp: string, upstreamDNS: string): Promise<void> {
-    const response = await fetch(`${API_URL}/api/clients/${clientIp}/upstream-dns`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ upstreamDNS }),
-    });
+  async setClientUpstreamDNS(
+    clientIp: string,
+    upstreamDNS: string
+  ): Promise<void> {
+    const response = await fetch(
+      `${API_URL}/api/clients/${clientIp}/upstream-dns`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ upstreamDNS }),
+      }
+    );
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || "Failed to set client upstream DNS");
@@ -1216,10 +1308,13 @@ export const api = {
   },
 
   async deleteClientUpstreamDNS(clientIp: string): Promise<void> {
-    const response = await fetch(`${API_URL}/api/clients/${clientIp}/upstream-dns`, {
-      method: "DELETE",
-      credentials: "include",
-    });
+    const response = await fetch(
+      `${API_URL}/api/clients/${clientIp}/upstream-dns`,
+      {
+        method: "DELETE",
+        credentials: "include",
+      }
+    );
     if (!response.ok) {
       const error = await response.json();
       throw new Error(error.error || "Failed to delete client upstream DNS");

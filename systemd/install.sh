@@ -570,8 +570,19 @@ echo -e "${GREEN}Building project...${NC}"
 cd "$INSTALL_PATH"
 
 # Set environment variables for client build with final URLs
-export VITE_API_URL="$FINAL_SERVER_URL"
-export VITE_AUTH_BASE_URL="$FINAL_SERVER_URL"
+# For IP addresses (including Tailscale), use relative URLs to match page protocol
+# This works with Tailscale's automatic HTTPS for IP addresses
+# For domains, use full HTTPS URLs
+if [[ "$CADDY_DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  # IP address - use relative URLs to match page protocol (HTTP or HTTPS)
+  # This works with Tailscale which provides HTTPS for IP addresses
+  export VITE_API_URL=""
+  export VITE_AUTH_BASE_URL=""
+else
+  # Domain - use full HTTPS URL
+  export VITE_API_URL="$FINAL_SERVER_URL"
+  export VITE_AUTH_BASE_URL="$FINAL_SERVER_URL"
+fi
 
 pnpm install
 pnpm run build
