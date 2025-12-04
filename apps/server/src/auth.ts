@@ -49,15 +49,32 @@ export const auth = betterAuth({
   trustedOrigins: (request: Request) => {
     const origin = request.headers.get('origin') || '';
 
-    // In development, allow any origin
-    if (process.env.NODE_ENV !== 'production') {
-      return origin ? [origin] : ['http://localhost:3000'];
+    // Always require explicit origin configuration for security
+    // Get allowed origins from environment variables
+    const envOrigins = process.env.BETTER_AUTH_TRUSTED_ORIGINS || process.env.CORS_ORIGINS;
+
+    if (envOrigins) {
+      const allowedOrigins = envOrigins
+        .split(',')
+        .map((o) => o.trim())
+        .filter((o) => o.length > 0);
+      return allowedOrigins.includes(origin) ? [origin] : allowedOrigins;
     }
 
-    // In production, use explicit trusted origins from env or default
-    const allowedOrigins = process.env.BETTER_AUTH_TRUSTED_ORIGINS?.split(',') ||
-      process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000'];
-    return allowedOrigins.includes(origin) ? [origin] : allowedOrigins;
+    // In development, use safe default origins (not any origin)
+    if (!isProduction) {
+      const devOrigins = [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+      ];
+      return devOrigins.includes(origin) ? [origin] : devOrigins;
+    }
+
+    // In production, require explicit configuration
+    logger.warn('BETTER_AUTH_TRUSTED_ORIGINS or CORS_ORIGINS not set in production. Using empty list.');
+    return [];
   },
   advanced: {
     defaultCookieAttributes: {
