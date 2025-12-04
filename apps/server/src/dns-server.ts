@@ -2,6 +2,7 @@ import dgram from 'dgram';
 import net from 'net';
 import tls from 'tls';
 import { resolve, basename } from 'path';
+import { validateCertPath } from './path-validator.js';
 import {
   dbQueries,
   dbLocalDNS,
@@ -3149,14 +3150,6 @@ export class DNSServer {
         return Promise.resolve();
       }
 
-      // Normalize paths (remove ./ prefix if present)
-      if (certPath.startsWith('./')) {
-        certPath = certPath.substring(2);
-      }
-      if (keyPath.startsWith('./')) {
-        keyPath = keyPath.substring(2);
-      }
-
       const fs = await import('fs');
       const { existsSync } = fs;
 
@@ -3191,13 +3184,18 @@ export class DNSServer {
 
       logger.debug('Detected project root', { projectRoot, cwd: process.cwd() });
 
-      // Resolve paths relative to project root
-      // If path is already absolute, resolve() will return it as-is
-      if (!certPath.startsWith('/')) {
-        certPath = resolve(projectRoot, certPath);
-      }
-      if (!keyPath.startsWith('/')) {
-        keyPath = resolve(projectRoot, keyPath);
+      // Validate and resolve certificate paths to prevent path traversal
+      try {
+        certPath = validateCertPath(certPath, projectRoot);
+        keyPath = validateCertPath(keyPath, projectRoot);
+      } catch (error) {
+        logger.error('Invalid certificate path', {
+          error: error instanceof Error ? error : new Error(String(error)),
+          certPath: dbSettings.get('dotCertPath', ''),
+          keyPath: dbSettings.get('dotKeyPath', ''),
+          projectRoot,
+        });
+        throw error;
       }
 
       // Check if files exist before trying to read them
@@ -3378,13 +3376,6 @@ export class DNSServer {
       let resolvedCertPath = certPath;
       let resolvedKeyPath = keyPath;
 
-      if (certPath.startsWith('./')) {
-        resolvedCertPath = certPath.substring(2);
-      }
-      if (keyPath.startsWith('./')) {
-        resolvedKeyPath = keyPath.substring(2);
-      }
-
       // Find project root
       let projectRoot = process.cwd();
       let currentDir = projectRoot;
@@ -3407,11 +3398,18 @@ export class DNSServer {
         projectRoot = resolve(projectRoot, '..');
       }
 
-      if (!resolvedCertPath.startsWith('/')) {
-        resolvedCertPath = resolve(projectRoot, resolvedCertPath);
-      }
-      if (!resolvedKeyPath.startsWith('/')) {
-        resolvedKeyPath = resolve(projectRoot, resolvedKeyPath);
+      // Validate and resolve certificate paths to prevent path traversal
+      try {
+        resolvedCertPath = validateCertPath(resolvedCertPath, projectRoot);
+        resolvedKeyPath = validateCertPath(resolvedKeyPath, projectRoot);
+      } catch (error) {
+        logger.error('Invalid DoQ certificate path', {
+          error: error instanceof Error ? error : new Error(String(error)),
+          certPath: dbSettings.get('doqCertPath', dbSettings.get('dotCertPath', '')),
+          keyPath: dbSettings.get('doqKeyPath', dbSettings.get('dotKeyPath', '')),
+          projectRoot,
+        });
+        return Promise.resolve();
       }
 
       if (!existsSync(resolvedCertPath) || !existsSync(resolvedKeyPath)) {
